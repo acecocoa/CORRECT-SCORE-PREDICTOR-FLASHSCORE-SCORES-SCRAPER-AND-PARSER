@@ -1,5 +1,11 @@
 IMPORTANT: you need to scan before getting scores!
 
+Don't worry if you select 320 scores and you get less, the scraper gets the same amount of scores for the 2 teams, for exemple if you select 320 scores to get and in the confrontation a team have played less and the other have played at least 320, you will get the number of score of the team who played less than 320 for the 2 teams.
+
+Of course you can change it with chatGPT.
+
+CSV export name exemple: 1100_Foot_320_Ostrava_B_VS_Polonia_B.csv = TIME_SPORT_number of scores_ teamA_teamC.csv
+
 Scraper is set on 320 maximum scores by match(confrontation/game) and by team.
 
 Can be upgraded to more than 320.
