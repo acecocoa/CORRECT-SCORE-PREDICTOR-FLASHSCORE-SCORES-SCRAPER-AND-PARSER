@@ -1360,11 +1360,10 @@ class FlashscoreApp(tk.Tk):
                        m_list, next_vals, rebounds, peaks, log_widget, label_prefix,
                        linear_rebound_func, peak_envelope_func):
 
-            # Calculer et afficher LR et PE comme **un seul nombre chacun**
             lin_pred = linear_rebound_func(next_vals)
             peak_pred = peak_envelope_func(next_vals)
 
-            self.write_log(log_widget, f"\nLR1 = {lin_pred} | PE1 = {peak_pred}\n")
+            self.write_log(log_widget, f"\nLR1 = {lin_pred:.2f} | PE1 = {peak_pred:.2f}\n")
         
     def write_log(self, target, text):
 
@@ -1690,6 +1689,8 @@ class FlashscoreApp(tk.Tk):
         # ====== log ======
 
         # --- fully_static_method_pattern 0 ---
+        self.write_log(self.log_teamA, f"\n===== method_pattern 0 =====\n")
+        
         for title, ml, blocN in self.motif_configs2:
             self.write_log(self.log_teamA, f"\n===== {title} =====\n")
 
@@ -1772,6 +1773,8 @@ class FlashscoreApp(tk.Tk):
                 )
 
         # --- fully_static_method_pattern 0---
+        self.write_log(self.log_teamC, f"\n===== method_pattern 0 =====\n")
+        
         for title, ml, blocN in self.motif_configs2:
             self.write_log(self.log_teamC, f"\n===== {title} =====\n")
 
