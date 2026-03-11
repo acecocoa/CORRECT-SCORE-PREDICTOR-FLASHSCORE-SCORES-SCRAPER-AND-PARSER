@@ -1,6 +1,8 @@
 ====== INTRODUCTION ======
 Flashscore scores scraper/parser, with over and correct scores predictors.
 
+Benchmark in "PREDICTOR(F4).py" => output file is "Benchmark_F4.txt".
+
 You will find:
 -14 CSV files with results.
 -6 Python scripts: 2 predictors and 3 scrapers.
