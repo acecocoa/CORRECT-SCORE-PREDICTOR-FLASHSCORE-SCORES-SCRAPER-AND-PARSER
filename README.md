@@ -13,6 +13,7 @@ You will find:
 -Readme.
 
 ====== SCRAPERS ======
+Match selection + all leagues: europe, america, asia, africa, australia.
 
 Scraper is set to collect 320 scores maximum by match(confrontation/game) and by team.
 It get home and away scores and write it in column A and column C of a ".CSV" file.
