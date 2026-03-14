@@ -5,11 +5,12 @@ Flashscore scores scraper/parser, with over and correct scores predictors.
 IMPORTANT: you will get an error message if you try to load a csv with not enough scores inside, you will just have to click "ok".
 
 Benchmark in "PREDICTOR(F4).py" => output file is "Benchmark_F4.txt".
-In "PREDICTOR(F4).py": message error export to a texte file(save_error_to_csv) by clicking ok.
+
+In "PREDICTOR(F4).py": message error export to a texte file(save_error_to_csv) by clicking "ok" button.
 
 You will find:
 -14 CSV files with results.
--6 Python scripts: 2 predictors and 3 scrapers.
+-6 Python scripts: 2 predictors(main predictor(F4) + correct score and 3 scrapers.
 -1 sh file
 -Readme.
 
