@@ -1,4 +1,5 @@
 ====== INTRODUCTION ======
+!Actually updating and upgrading to multiselection listboxs => Done: "FLASHSCORE TODAY SCRAPER.py; ...WIP leagues...
 
 Flashscore scores scraper/parser, with over and correct scores predictors.
 
