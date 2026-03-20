@@ -1,7 +1,9 @@
 Get matchs amready played with results: https://github.com/acecocoa/CSV-PREDICED-MATCHS
 
 ====== INTRODUCTION ======
-!Actually updating and upgrading to multiselection listboxs => Done: "FLASHSCORE TODAY SCRAPER.py; ...WIP leagues...
+Upgrade: 
+-search field in scraper.
+-More accuracy in predictor.
 
 Flashscore scores scraper/parser, with over and correct scores predictors.
 
