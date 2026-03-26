@@ -4,7 +4,9 @@ Get matchs already played with results: UPDATE IN PROGRESS
 
 MAIN Upgrades: 
 -search field in scraper.
+
 -More accuracy in predictor.
+
 -Benchmark made decision in prédictor(result in the bengining of lower log)
 
 Flashscore scores scraper/parser, with over and correct scores predictors.
