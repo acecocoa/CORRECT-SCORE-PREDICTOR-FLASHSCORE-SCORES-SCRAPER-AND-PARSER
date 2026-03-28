@@ -1,4 +1,4 @@
-Get matchs already played with results: UPDATE IN PROGRESS
+Get matchs already played with results: https://github.com/acecocoa/CSV-PREDICTED-MATCHS-1
 
 ====== INTRODUCTION ======
 
