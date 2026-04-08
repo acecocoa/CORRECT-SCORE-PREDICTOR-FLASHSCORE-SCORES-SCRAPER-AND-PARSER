@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import traceback,csv,os,shutil,subprocess,sys,math
+import traceback,csv,os,shutil,subprocess,sys,math,statistics
 from datetime import datetime
 from typing import List, Optional, Tuple, Dict
 import pandas as pd
@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import ttk,messagebox,simpledialog
 from collections import Counter
 from itertools import combinations
+import numpy as np
 
 DEFAULT_SCORES={}
 EXPORT_DIR="export_csv"
@@ -274,7 +275,7 @@ class FlashscoreApp(tk.Tk):
         return zero_sequences,zero_signal,last_value
 
     def display_recent_averages(self,series,log_widget):
-        series_data=series[:-1];lengths=[5,10,15];avg=[]
+        series_data=series[:-1];lengths=[10,15,20];avg=[]
         for L in lengths:
             avg.append(f"Last{L}={sum(series_data[-L:])/L:.2f}" if len(series_data)>=L else f"Last{L}=N/A")
         self.write_log(log_widget,f"\n📊 LAST MEANS : {' | '.join(avg)}\n")
@@ -699,85 +700,6 @@ class FlashscoreApp(tk.Tk):
         pred = max(0, intercept + slope * n)
         return {"prediction": pred, "count": m}
 
-    def display_consecutive_stats(self,series,log_widget):
-        data=series[:-1]
-        if not data:return
-        last=data[-1];count=0;i=len(data)-1
-        while i>=0 and data[i]==last:count+=1;i-=1
-        zero_last=count if last==0 else 0
-        one_last=count if last==1 else 0
-        self.write_log(log_widget,f"Most recent: 0={zero_last}* | 1={one_last}*\n")
-
-        last15=data[-15:] if len(data)>=15 else data
-        max0=max1=cur0=cur1=0
-        for v in last15:
-            if v==0:cur0+=1;max0=max(max0,cur0);cur1=0
-            elif v==1:cur1+=1;max1=max(max1,cur1);cur0=0
-            else:cur0=cur1=0
-        self.write_log(log_widget,f"In 15 last: 0={max0}* | 1={max1}*\n")
-        
-    def compute_average_remaining(self, series):
-        data = series[:-1]
-        if not data:
-            return 0
-        return sum(data) / len(data)
-
-    def display_median_extrema_series_means(self,series,log_widget,mode="min"):
-        data=series[:-1]
-        if not data:return
-        sizes=[(7,[15,27,51]),(13,[27,51,99]),(25,[51,99])]
-        configs=[(m,z) for m,zs in sizes for z in zs]
-        min_zone=min(z for _,z in configs)
-        if len(data)<min_zone:return
-
-        if mode=="min":
-            self.write_log(log_widget,"\nMedian minima 'N values mean' in 'N lasts':\n");func=min
-        elif mode=="max":
-            self.write_log(log_widget,"\nMedian maxima 'N values mean' in 'N lasts':\n");func=max
-        else:raise ValueError("mode must be 'min' or 'max'")
-
-        for mean_size,zone_size in configs:
-            if len(data)<zone_size:
-                self.write_log(log_widget,f"{mean_size} in {zone_size} : N/A\n");continue
-            zone=data[-zone_size:]
-            val=func(zone);idx=zone.index(val)
-            center=zone_size//2
-            if idx!=center:
-                self.write_log(log_widget,f"{mean_size} in {zone_size} : N/A\n");continue
-            half=mean_size//2
-            start=max(0,idx-half);end=start+mean_size
-            if end>len(zone):end=len(zone);start=end-mean_size
-            subset=zone[start:end]
-            if len(subset)==mean_size:
-                avg=sum(subset)/mean_size
-                self.write_log(log_widget,f"{mean_size} in {zone_size} : {avg:.2f}\n")
-            else:self.write_log(log_widget,f"{mean_size} in {zone_size} : N/A\n")
-
-    def display_median_extrema_means(self,series,log_widget,mode="min"):
-        data=series[:-1]
-        if not data:return
-        configs=[(7,15),(7,27),(7,51),(13,27),(13,51),(13,99),(25,51),(25,99)]
-
-        if mode=="min":
-            self.write_log(log_widget,"\n📊 Median minima 'N values mean' in 'N lasts':\n");func=min
-        elif mode=="max":
-            self.write_log(log_widget,"\n📊 Median maxima 'N values mean' in 'N lasts':\n");func=max
-        else:raise ValueError("mode must be 'min' or 'max'")
-
-        for mean_size,zone_size in configs:
-            if len(data)<zone_size:
-                self.write_log(log_widget,f"{mean_size} in {zone_size} : N/A\n");continue
-            zone=data[-zone_size:]
-            val=func(zone);idx=zone.index(val)
-            half=mean_size//2
-            start=max(0,idx-half);end=start+mean_size
-            if end>len(zone):end=len(zone);start=end-mean_size
-            subset=zone[start:end]
-            if len(subset)==mean_size:
-                avg=sum(subset)/mean_size
-                self.write_log(log_widget,f"{mean_size} in {zone_size} : {avg:.2f}\n")
-            else:self.write_log(log_widget,f"{mean_size} in {zone_size} : N/A\n")
-
     def compute_blocks_with_gaps(self,series,min_block=2,gap_between=None,log_widget=None):
         data=series[:-1];n=len(data);i=n-1
         results=[];block_avgs=[]
@@ -891,147 +813,293 @@ class FlashscoreApp(tk.Tk):
         pred=max(0,y[-1]+slope)
         return pred
 
-    def detect_over_probable(self, series, log_widget):
-        data = series[:-1]  
-        n = len(data)
-        if n < 3:
-            return
-
-        windows = [3, 15, 30, 45]
-        avg_results = []
-
-        for w in windows:
-            if n < w:
-                continue
-            last_w = data[-w:]
-            avg_w = sum(last_w) / w
-            avg_results.append(avg_w)
-
-        start = 45
-        while start < n:
-            end = min(start + 45, n)
-            window_data = data[-end:-start] if start != 0 else data[-end:]
-            if window_data:
-                avg_window = sum(window_data) / len(window_data)
-                avg_results.append(avg_window)
-            start += 45
-
-        trend_window = min(10, n)
-        recent = data[-trend_window:]
-        diffs = [recent[i+1] - recent[i] for i in range(len(recent)-1)]
-        trend_score = sum(d for d in diffs if d < 0)  
-        extreme_fall = trend_score <= -0.5 * trend_window 
-
-        overall_avg = sum(avg_results) / len(avg_results) if avg_results else 0
-        if overall_avg < 0.25 or extreme_fall:
-            self.write_log(log_widget, "⚽= LOT GOALS(PROB)\n")
-
-    def check_over_probability_hybrid(self, series, log_widget):
-        data = series[:-1]  
-        n = len(data)
-        if n < 3:
-            return
-
-        windows = [3, 15, 30, 45]
-        results = []
-
-        for w in windows:
-            if n < w:
-                continue
-            last_w = data[-w:]
-            avg_w = sum(last_w) / w
-            results.append(avg_w)
-
-        start = 45
-        while start < n:
-            end = min(start + 45, n)
-            window_data = data[-end:-start] if start != 0 else data[-end:]
-            if window_data:
-                avg_window = sum(window_data) / len(window_data)
-                results.append(avg_window)
-            start += 45
-
-        overall_score = sum(results) / len(results) if results else 0
-
-        last = data[-1]
-        prev1 = data[-2] if n >= 2 else 0
-        prev2 = data[-3] if n >= 3 else 0
-        cond_last = last == 0 and prev1 < 3 and prev2 < 3
-
-        threshold = 0.25
-        if overall_score < threshold or cond_last:
-            self.write_log(log_widget, "⚽= LOT GOALS(HYBRID)\n")
-
-    def compute_over_under_full(self, series, log_widget):
+    def compute_average_remaining(self, series):
         data = series[:-1]
-        n = len(data)
+        if not data:
+            return 0
+        return sum(data) / len(data)
 
-        if n < 5:
-            return
+    def display_median_extrema_series_means(self,series,log_widget,mode="min"):
+        data=series[:-1]
+        if not data:return
+        sizes=[(7,[15,27,51]),(13,[27,51,99]),(25,[51,99])]
+        configs=[(m,z) for m,zs in sizes for z in zs]
+        min_zone=min(z for _,z in configs)
+        if len(data)<min_zone:return
 
-        last_value = data[-1]
+        if mode=="min":
+            self.write_log(log_widget,"\nMedian minima 'N values mean' in 'N lasts':\n");func=min
+        elif mode=="max":
+            self.write_log(log_widget,"\nMedian maxima 'N values mean' in 'N lasts':\n");func=max
+        else:raise ValueError("mode must be 'min' or 'max'")
 
-        def avg_last(k):
-            return sum(data[-k:]) / k if n >= k else None
+        for mean_size,zone_size in configs:
+            if len(data)<zone_size:
+                self.write_log(log_widget,f"{mean_size} in {zone_size} : N/A\n");continue
+            zone=data[-zone_size:]
+            val=func(zone);idx=zone.index(val)
+            center=zone_size//2
+            if idx!=center:
+                self.write_log(log_widget,f"{mean_size} in {zone_size} : N/A\n");continue
+            half=mean_size//2
+            start=max(0,idx-half);end=start+mean_size
+            if end>len(zone):end=len(zone);start=end-mean_size
+            subset=zone[start:end]
+            if len(subset)==mean_size:
+                avg=sum(subset)/mean_size
+                self.write_log(log_widget,f"{mean_size} in {zone_size} : {avg:.2f}\n")
+            else:self.write_log(log_widget,f"{mean_size} in {zone_size} : N/A\n")
 
-        avg5  = avg_last(5)
-        avg10 = avg_last(10)
-        avg15 = avg_last(15)
-        avg20 = avg_last(20)
-        avg25 = avg_last(25)
+    def display_median_extrema_means(self,series,log_widget,mode="min"):
+        data=series[:-1]
+        if not data:return
+        configs=[(3,15),(7,15),(7,27),(7,51),(13,27),(13,51),(13,99),(25,51),(25,99)]
 
-        count = 0
-        if avg5  is not None and last_value > avg5:
-            count += -2
-        if avg10 is not None and last_value > avg10:
-            count += -1
-        if avg15 is not None and last_value > avg15:
-            count += 0
-        if avg20 is not None and last_value > avg20:
-            count += 1
-        if avg25 is not None and last_value > avg25:
-            count += 2
+        if mode=="min":
+            self.write_log(log_widget,"\n📊 Median minima 'N values mean' in 'N lasts':\n");func=min
+        elif mode=="max":
+            self.write_log(log_widget,"\n📊 Median maxima 'N values mean' in 'N lasts':\n");func=max
+        else:raise ValueError("mode must be 'min' or 'max'")
 
-        count2 = 0
-        if avg5  is not None and last_value < avg5:
-            count2 += 2
-        if avg10 is not None and last_value < avg10:
-            count2 += 1
-        if avg15 is not None and last_value < avg15:
-            count2 += 0
-        if avg20 is not None and last_value < avg20:
-            count2 += -1
-        if avg25 is not None and last_value < avg25:
-            count2 += -2
+        for mean_size,zone_size in configs:
+            if len(data)<zone_size:
+                self.write_log(log_widget,f"{mean_size} in {zone_size} : N/A\n");continue
+            zone=data[-zone_size:]
+            val=func(zone);idx=zone.index(val)
+            half=mean_size//2
+            start=max(0,idx-half);end=start+mean_size
+            if end>len(zone):end=len(zone);start=end-mean_size
+            subset=zone[start:end]
+            if len(subset)==mean_size:
+                avg=sum(subset)/mean_size
+                self.write_log(log_widget,f"{mean_size} in {zone_size} : {avg:.2f}\n")
+            else:self.write_log(log_widget,f"{mean_size} in {zone_size} : N/A\n")
 
-        countT = count + count2
+    def predict_score_from_seriesA(self, seriesA, seriesC):     
+        def compute(s):
+            s = np.array(s[:-1]) if len(s) > 1 else np.array(s)
 
-        def label_with_value(v):
-            if v > 0:
-                return f"({v}) ⚽ + de "
-            elif v < 0:
-                return f"({v}) ⚽ - de "
-            else:
-                return f"({v}) ⚽ = à "
+            if len(s) == 0:
+                return {
+                    "mean": 0.0,
+                    "recent5": 0.0,
+                    "recent3": 0.0,
+                    "std": 0.0,
+                    "momentum": 0.0
+                }
 
-        def label_simple(v):
-            if v > 0:
-                return "⚽ + de "
-            elif v < 0:
-                return "⚽ - de "
-            else:
-                return "⚽ = à "
+            mean = np.mean(s)
+            recent5 = np.mean(s[-5:]) if len(s) >= 5 else mean
+            recent3 = np.mean(s[-3:]) if len(s) >= 3 else mean
+            std = np.std(s)
+            momentum = recent5 - mean
 
-        self.write_log(
-            log_widget,
-            f"\n📊 OVER/ UNDER/ NEUTRAL:\n"
-            f"{label_with_value(countT)}{last_value} or LAST MEANS\n"
-        )
+            return {
+                "mean": mean,
+                "recent5": recent5,
+                "recent3": recent3,
+                "std": std,
+                "momentum": momentum
+            }
 
-        self.write_log(
-            log_widget,
-            f"{label_simple(countT)}{last_value} or LAST MEANS\n"
-        )
+        A = compute(seriesA)
+        C = compute(seriesC)
+
+        baseA = A["mean"] + 0.6 * A["recent5"] + 0.2 * A["recent3"]
+        baseC = C["mean"] + 0.6 * C["recent5"] + 0.2 * C["recent3"]
+
+        instabilityA = -1.0 * A["std"]
+        instabilityC = -1.0 * C["std"]
+
+        opp_instability_A = +0.8 * C["std"]
+        opp_instability_C = +0.8 * A["std"]
+
+        opp_strength_A = -0.7 * C["mean"]
+        opp_strength_C = -0.7 * A["mean"]
+
+        momentumA = 0.3 * A["momentum"]
+        momentumC = 0.3 * C["momentum"]
+
+        scoreA = baseA + instabilityA + opp_instability_A + opp_strength_A + momentumA
+        scoreC = baseC + instabilityC + opp_instability_C + opp_strength_C + momentumC
+
+        scoreA = round(max(0, min(scoreA, 10)), 2)
+        scoreC = round(max(0, min(scoreC, 10)), 2)
+
+        scoreA_str = f"{scoreA:.2f}"
+        scoreC_str = f"{scoreC:.2f}"
+
+        return scoreA_str, scoreC_str
+
+    def predict_score_from_seriesB(self, series, opponent_series=None):
+        if not series or len(series) < 5:
+            return "0.00", {"reason": "series too short"}
+
+        RECENT_WINDOW = 10
+        W_RECENT = 0.6
+        W_GLOBAL = 0.4
+        MAX_GOALS = 4
+        MIN_GOALS = 0
+
+        recent = series[-RECENT_WINDOW-1:-1]  
+        recent_mean = sum(recent) / len(recent)
+
+        sorted_series = sorted(series)
+        n = len(sorted_series)
+        idx_75 = int(0.75 * (n - 1))
+        global_75p = sorted_series[idx_75]
+
+        base_score = (W_RECENT * recent_mean) + (W_GLOBAL * global_75p)
+
+        std = statistics.pstdev(series) if len(series) > 1 else 0
+        if std < 0.35:
+            base_score *= 0.95
+        elif std > 1.5:
+            base_score *= 1.05
+
+        if opponent_series and len(opponent_series) >= 5:
+            opponent_mean = sum(opponent_series[-RECENT_WINDOW-1:-1]) / len(opponent_series[-RECENT_WINDOW-1:-1])
+        
+            if opponent_mean < 1.5:
+                base_score *= 1.15  
+
+            elif opponent_mean > 2.5:
+                base_score *= 0.9
+
+        if hasattr(self, 'current_team') and self.current_team in ['A', 'C']:
+            if self.current_team == 'A':
+                base_score *= 1.05  
+            elif self.current_team == 'C':
+                base_score *= 0.95  
+
+        final_score = round(base_score, 2)
+        final_score = max(MIN_GOALS, min(MAX_GOALS, final_score))
+
+        meta = {
+            "recent_mean": f"{recent_mean:.2f}",
+            "global_75p": f"{global_75p:.2f}",
+            "base_score": f"{base_score:.2f}",
+            "std": f"{std:.2f}",
+            "final_score": f"{final_score:.2f}"
+        }
+
+        return f"{final_score:.2f}", meta
+
+    def predict_score_from_seriesC(self, series, opponent_series=None):
+        if not series or len(series) < 5:
+            return "0.00", {"reason": "series too short"}
+
+        RECENT_WINDOW = 10
+        MAX_GOALS = 4
+        MIN_GOALS = 0
+
+        recent = series[-RECENT_WINDOW-1:-1] 
+        recent_mean = sum(recent) / len(recent)
+
+        sorted_series = sorted(series)
+        idx_75 = int(0.75 * (len(sorted_series) - 1))
+        global_75p = sorted_series[idx_75]
+
+        base_score = 0.6 * recent_mean + 0.4 * global_75p
+
+        std = statistics.pstdev(series) if len(series) > 1 else 0
+        if std < 0.35:
+            base_score *= 0.95
+        elif std > 1.5:
+            base_score *= 1.05
+
+        opponent_mean = None
+        if opponent_series and len(opponent_series) >= 5:
+            opponent_mean = sum(opponent_series[-RECENT_WINDOW-1:-1]) / len(opponent_series[-RECENT_WINDOW-1:-1])
+
+            if opponent_mean < 2.0:
+                boost_ratio = max(0, 2.0 - opponent_mean) / 2.0  
+                base_score = base_score + (MAX_GOALS - base_score) * boost_ratio
+            elif opponent_mean > 2.5:
+                base_score *= 0.85
+
+        if opponent_mean is not None:
+            series_mean = sum(series[-RECENT_WINDOW:]) / len(series[-RECENT_WINDOW:])
+            diff = series_mean - opponent_mean
+            if diff > 0:
+                base_score *= 1 + min(diff / 1.5, 0.2)
+            elif diff < 0:
+                base_score *= 1 - min(-diff / 1.5, 0.2)
+
+        final_score = round(base_score, 2)
+        final_score = max(MIN_GOALS, min(MAX_GOALS, final_score))
+
+        meta = {
+            "recent_mean": f"{recent_mean:.2f}",
+            "global_75p": f"{global_75p:.2f}",
+            "base_score": f"{base_score:.2f}",
+            "std": f"{std:.2f}",
+            "final_score": f"{final_score:.2f}",
+            "opponent_mean": f"{opponent_mean:.2f}" if opponent_mean is not None else "N/A",
+        }
+
+        return f"{final_score:.2f}", meta
+  
+    def predict_score_from_seriesD(self, team_stats):
+        if isinstance(team_stats, list):
+            series = team_stats[:-1]  
+            n = len(series)
+            mean = sum(series)/n if n else 0
+            recent3 = sum(series[-3:])/min(3,n) if n else 0
+            recent5 = sum(series[-5:])/min(5,n) if n else 0
+            recent10 = sum(series[-10:])/min(10,n) if n else 0
+
+            rebond_lineaire = sum(series[i+1]-series[i] for i in range(n-1))/max(1,n-1) if n>=2 else 0
+
+            peak_envelope = max(series) - min(series) if n else 0
+
+            std = (sum((x - mean)**2 for x in series)/n)**0.5 if n else 0
+
+            team_stats = {
+                "mean": mean,
+                "recent3": recent3,
+                "recent5": recent5,
+                "recent10": recent10,
+                "rebond_lineaire": rebond_lineaire,
+                "peak_envelope": peak_envelope,
+                "std": std
+            }
+
+        mean = team_stats['mean']
+        recent3 = team_stats['recent3']
+        recent5 = team_stats['recent5']
+        recent10 = team_stats['recent10']
+        rebond = team_stats['rebond_lineaire']
+        peak = team_stats['peak_envelope']
+        std = team_stats.get('std', 0)
+
+        predicted_score = mean + 0.5*rebond
+        return f"{predicted_score:.2f}"
+        
+    def predict_score_from_seriesE(self, series):
+        if not series or len(series) < 5:
+            return "0.00" 
+
+        series = series[:-1] 
+
+        recent5 = sum(series[-5:]) / 5
+        recent10 = sum(series[-10:]) / min(10, len(series))
+        mean_val = sum(series) / len(series)
+
+        rebond_lineaire = recent5 - recent10
+
+        score = 0.6 * recent5 + 0.3 * recent10 + 0.1 * mean_val
+
+        score += 5 * rebond_lineaire
+
+        if recent5 < 0.8:
+            score -= 0.5
+        elif recent5 > 1.8:
+            score += 0.5
+
+        score = max(0, min(score, 100))
+
+        return f"{score:.2f}"
 
     def _build_ui(self):
         top=ttk.Frame(self);top.pack(fill="x",padx=8,pady=6);top.columnconfigure(1,weight=1)
@@ -1088,35 +1156,66 @@ class FlashscoreApp(tk.Tk):
         log2.config(yscrollcommand=sb2.set)
         setattr(self,f"log_team{team}_1",log2)
 
-    def _build_log_frame(self,parent,controls):
-        container=ttk.Frame(parent)
-        container.grid(row=0,column=2,sticky="nsew",padx=(6,2))
-        container.rowconfigure(3,weight=1)
-        container.columnconfigure(0,weight=1)
+    def _build_log_frame(self, parent, controls):
+        container = ttk.Frame(parent)
+        container.grid(row=0, column=2, sticky="nsew", padx=(6,2))
+        container.rowconfigure(4, weight=1) 
+        container.columnconfigure(0, weight=1)
 
-        btns=ttk.Frame(container);btns.grid(row=0,column=0,sticky="ew",pady=(0,4))
-        ttk.Button(btns,text="HIDE",command=self.hide_selected_csv).pack(side="left",padx=4)
-        ttk.Button(btns,text="ARCHIVE",command=self.archive_selected_csv).pack(side="left",padx=4)
+        btns = ttk.Frame(container)
+        btns.grid(row=0, column=0, sticky="ew", pady=(0,4))
+        ttk.Button(btns, text="HIDE", command=self.hide_selected_csv).pack(side="left", padx=4)
+        ttk.Button(btns, text="ARCHIVE", command=self.archive_selected_csv).pack(side="left", padx=4)
 
-        ttk.Button(container,text="CLEAR LOG",
-            command=self.reset_csv_log).grid(row=1,column=0,sticky="w",pady=(0,4))
+        ttk.Button(container, text="CLEAR LOG",
+            command=self.reset_csv_log).grid(row=1, column=0, sticky="w", pady=(0,4))
 
-        nav=ttk.Frame(container)
-        nav.grid(row=2,column=0,sticky="w",pady=(0,4))
-        ttk.Button(nav,text="PREV.",command=self.prev_csv).pack(side="left",padx=2)
-        ttk.Label(nav,text="<").pack(side="left",padx=(0,6))
-        ttk.Label(nav,text=">").pack(side="left",padx=(6,0))
-        ttk.Button(nav,text="NEXT.",command=self.next_csv).pack(side="left",padx=2)
+        nav = ttk.Frame(container)
+        nav.grid(row=2, column=0, sticky="w", pady=(0,4))
+        ttk.Button(nav, text="PREV.", command=self.prev_csv).pack(side="left", padx=2)
+        ttk.Label(nav, text="<").pack(side="left", padx=(0,6))
+        ttk.Label(nav, text=">").pack(side="left", padx=(6,0))
+        ttk.Button(nav, text="NEXT.", command=self.next_csv).pack(side="left", padx=2)
 
-        self.log_csv=tk.Listbox(container,selectmode="extended",height=25)
-        self.log_csv.grid(row=3,column=0,sticky="nsew")
+        search_frame = ttk.Frame(container)
+        search_frame.grid(row=3, column=0, sticky="w", pady=(0,4))
 
-        sb=ttk.Scrollbar(container,command=self.log_csv.yview)
-        sb.grid(row=3,column=1,sticky="ns")
+        self.search_var = tk.StringVar()
+        self.search_entry = tk.Entry(search_frame, textvariable=self.search_var, width=25)
+        self.search_entry.pack(side="left")
+
+        self.search_var.trace_add("write", self.highlight_matches)
+
+        self.log_csv = tk.Listbox(container, selectmode="extended", height=25)
+        self.log_csv.grid(row=4, column=0, sticky="nsew")
+
+        sb = ttk.Scrollbar(container, command=self.log_csv.yview)
+        sb.grid(row=4, column=1, sticky="ns")
         self.log_csv.config(yscrollcommand=sb.set)
 
-        self.log_csv.bind("<<ListboxSelect>>",self.on_csv_select)
+        self.log_csv.bind("<<ListboxSelect>>", self.on_csv_select)
+
         self.refresh_csv_log()
+
+    def highlight_matches(self, *args):
+        query = self.search_var.get().lower().strip()
+
+        self.search_active = True
+
+        self.log_csv.selection_clear(0, tk.END)
+
+        if hasattr(self, "user_selection"):
+            for i in self.user_selection:
+                self.log_csv.selection_set(i)
+
+        if query:
+            for i in range(self.log_csv.size()):
+                text = self.log_csv.get(i).lower()
+                if query in text:
+                    self.log_csv.selection_set(i)
+                    self.log_csv.see(i)
+
+        self.search_active = False
 
     def on_motif_next_clicked(self):
         new_val=simpledialog.askinteger(
@@ -1428,7 +1527,7 @@ class FlashscoreApp(tk.Tk):
         resultA, resultC = self.fully_static_method_with_patterns(seriesA, seriesC)
 
         with open(filepath, "w", encoding="utf-8") as f:  
-            f.write("=========== BENCHMARK ===========\n\n")
+            f.write("STATISTIQUES D'AVANT MATCH ET RESULTAT\n")
 
             def log(text):
                 f.write(text + "\n")
@@ -1437,8 +1536,8 @@ class FlashscoreApp(tk.Tk):
             teamC_score = getattr(self, "entry_teamC_score").get().strip()
 
             def process_series(series, result, label, team_score):
-                log(f"\nEQUIPE {label}")
-                log(f"(L'équipe {label}) à marquée {team_score} but(s)")
+                log(f"Résultat du match: l'équipe {label} a marquée {team_score} but(s).")
+                log(f"Statistiques d'avant match de l'équipe {label}:")
                 log(f"===> 📊 METHODE 1 <===")
                 used_global = set()
                 res1 = [self.fully_static_method_pattern1(series, ml, blocN, self.motif_next_distance, used_global)
@@ -1517,20 +1616,9 @@ class FlashscoreApp(tk.Tk):
                 for b in self.compute_blocks_with_gaps(series, 2, None, f):
                     log(f"LR ⚽={b.get('linear_rebound',0):.3f} | PE ⚽={b.get('peak_envelope',0):.3f} | CORRECT SCORE ⚽={b.get('average_remaining',0):.3f}")
 
-                self.compute_over_under_full(series, f)
                 self.display_recent_averages(series, f)
                 self.display_median_extrema_means(series, f, "min")
                 self.display_median_extrema_means(series, f, "max")
-
-                log("\n📊 GLOBAL LOT / FEW GOALS PROB:")
-                zero_seq, zero_signal, last_zero = self.analyze_zero_pattern(series)
-                if zero_seq:
-                    log("X" if len(zero_seq)<3 else f"⚽= {zero_signal} {last_zero}")
-
-                self.detect_over_probable(series, f)
-                self.check_over_probability_hybrid(series, f)
-                log("\n📊 Consecutives 0 & 1:")
-                self.display_consecutive_stats(series, f)
 
             process_series(seriesA, resultA, "A", teamA_score)
             process_series(seriesC, resultC, "C", teamC_score)
@@ -1542,12 +1630,12 @@ class FlashscoreApp(tk.Tk):
         last5 = sum(data[-5:]) / 5 if len(data) >= 5 else 0
         last10 = sum(data[-10:]) / 10 if len(data) >= 10 else 0
         last15 = sum(data[-15:]) / 15 if len(data) >= 15 else 0
-        return last5, last10, last15
-
+        last20 = sum(data[-20:]) / 20 if len(data) >= 20 else 0
+        return last10, last15, last20
 
     def extract_median_extrema(self, series, mode="min"):
         data = series[:-1]
-        configs = [(7,15),(7,27),(7,51),(13,27),(13,51),(13,99),(25,51),(25,99)]
+        configs = [(3,15),(7,15),(7,27),(7,51),(13,27),(13,51),(13,99),(25,51),(25,99)]
 
         values = []
         for mean_size, zone_size in configs:
@@ -1587,45 +1675,61 @@ class FlashscoreApp(tk.Tk):
             return "à 0"
 
     def predict_score(self, data):
-        last5 = data["last5"]
         last10 = data["last10"]
         last15 = data["last15"]
-
+        last20 = data["last20"]
+        
         median_min = min(data["median_min_values"])
         median_max = max(data["median_max_values"])
 
         lr_cs = data["lr_correct_score"]
         pe_cs = data["pe_correct_score"]
 
-        over_under = data["over_under"]
+        over_under = str(data.get("over_under","neutre")) 
 
         accuracy = data["accuracy"]
         accuracy2 = data["accuracy2"]
 
-        zone_min = min(last5, last10, last15, median_min)
-        zone_max = max(last5, last10, last15, median_max)
+        mean_last = (0.5 * last15) + (0.3 * last10) + (0.2 * last20)
 
-        mean_last = (last5 + last10 + last15) / 3
+        lr_norm = min(max(lr_cs, 0), 3)
 
-        score_continu = (lr_cs + pe_cs + mean_last) / 3
+        score_continu = mean_last * (1 + 0.15 * lr_norm)
+
+        score_continu += 0.1 * pe_cs
 
         if "à 0" in over_under:
-            score_continu -= 0.3
+            score_continu -= 0.25
         elif "+ de" in over_under:
-            score_continu += 0.3
+            score_continu += 0.25
+
+        zone_min = min(last10, last15, last20, median_min)
+        zone_max = max(last10, last15, last20, median_max)
+
+        score_continu = max(zone_min, min(score_continu, zone_max))
 
         score_final = round(score_continu)
 
-        if score_final < zone_min:
-            score_final = int(zone_min)
+        all_acc = accuracy + accuracy2
 
-        if score_final > zone_max:
-            score_final = int(zone_max)
+        if all_acc:
+            score_weights = {}
+            for a in all_acc:
+                s = a["score"]
+                w = a["equal"] * 2 + a["prop"] 
 
-        best_acc = max(accuracy, key=lambda x: (x["equal"], x["prop"]))
+                if s not in score_weights:
+                    score_weights[s] = 0
+                score_weights[s] += w
 
-        if abs(best_acc["score"] - score_final) == 1:
-            score_final = best_acc["score"]
+            best_score = max(score_weights.items(), key=lambda x: x[1])[0]
+
+            if abs(best_score - score_final) == 1:
+                score_final = best_score
+            elif score_weights.get(best_score, 0) > 1.5 * score_weights.get(score_final, 1):
+                score_final = best_score
+
+        score_final = max(0, int(score_final))
 
         return score_final
 
@@ -1643,8 +1747,31 @@ class FlashscoreApp(tk.Tk):
         for log in (self.log_teamA,self.log_teamA_1,self.log_teamC,self.log_teamC_1):
             log.delete("1.0",tk.END)
 
+        def write_method4(series,log):
+            self.write_log(log,"===> 📊 WIN/LOSE PROB <===\n")
+            lin_Id,lin_Pr,peak_Id,peak_Pr=[],[],[],[]
+            for _,ml,blocN in self.motif_configs:
+                r=self.fully_static_method_pattern2(series,ml,blocN,self.motif_next_distance)
+                lin_Id.append(f"{r['pred_results1']['linear_rebound']:.1f}")
+                lin_Pr.append(f"{r['pred_results2']['linear_rebound']:.1f}")
+                peak_Id.append(f"{r['pred_results1']['peak_envelope']:.1f}")
+                peak_Pr.append(f"{r['pred_results2']['peak_envelope']:.1f}")
+
+            def row(l,v):return f"{l:<2}|"+ "|".join(f"{x:^2}" for x in v)+"|"
+
+            self.write_log(log,"Rebond linéaires:\n")
+            self.write_log(log,""+row("Id",lin_Id))
+            self.write_log(log,"\n"+row("Pr",lin_Pr))
+            self.write_log(log,"\n")
+            self.write_log(log,"\nPeak envelope:\n")
+            self.write_log(log,""+row("Id",peak_Id))
+            self.write_log(log,"\n"+ row("Pr", peak_Pr) + "\n\n")
+            
+        write_method4(seriesA,self.log_teamA)
+        write_method4(seriesC,self.log_teamC)
+
         def write_method1(series,log):
-            self.write_log(log,"===> 📊 METHODE 1 <===\n")
+            self.write_log(log,"===> 📊 GOAL PROB <===\n")
             used_global = set()
             res = [self.fully_static_method_pattern1(series, ml, blocN, self.motif_next_distance, used_global)
                    for _, ml, blocN in self.motif_configs]
@@ -1702,87 +1829,91 @@ class FlashscoreApp(tk.Tk):
 
         write_method3(seriesA,self.log_teamA)
         write_method3(seriesC,self.log_teamC)
-        
-        def write_method4(series,log):
-            self.write_log(log,"\n===> 📊 METHODE 3 <===\n")
-            lin_Id,lin_Pr,peak_Id,peak_Pr=[],[],[],[]
-            for _,ml,blocN in self.motif_configs:
-                r=self.fully_static_method_pattern2(series,ml,blocN,self.motif_next_distance)
-                lin_Id.append(f"{r['pred_results1']['linear_rebound']:.1f}")
-                lin_Pr.append(f"{r['pred_results2']['linear_rebound']:.1f}")
-                peak_Id.append(f"{r['pred_results1']['peak_envelope']:.1f}")
-                peak_Pr.append(f"{r['pred_results2']['peak_envelope']:.1f}")
 
-            def row(l,v):return f"{l:<2}|"+ "|".join(f"{x:^2}" for x in v)+"|"
-
-            self.write_log(log,"Rebond linéaires:\n")
-            self.write_log(log,""+row("Id",lin_Id))
-            self.write_log(log,"\n"+row("Pr",lin_Pr))
-            self.write_log(log,"\n")
-            self.write_log(log,"\nPeak envelope:\n")
-            self.write_log(log,""+row("Id",peak_Id))
-            self.write_log(log,"\n"+ row("Pr", peak_Pr) + "\n\n")
-            
-        write_method4(seriesA,self.log_teamA)
-        write_method4(seriesC,self.log_teamC)
-
-        def write_lower(series,result,log):
+        # LOWER LOG
+        def write_lower(series, result, log, team_label):
             self.write_log(log,"=========== CORRECT SCORE SET 2 ===========\n")
 
-            # ====== ICI ======
+            # --- BUILD DATA FOR PREDICT_SCORE ---
             try:
-                # Préparer les données nécessaires pour predict_score
+                results_complete = self.motif_engine_complete2(series)
+                results_targeted = self.motif_engine_targeted_with_cr2(series, tol=0.15)
+
+                divergenceT = self.decide_divergence_targeted(results_targeted)
+
                 lin = self.linear_rebound_prediction(series)
                 peak = self.peak_envelope_linear_prediction(series)
                 avg_rem = self.compute_average_remaining(series)
 
-                results_complete = self.motif_engine_complete2(series)
-                results_targeted = self.motif_engine_targeted_with_cr2(series, tol=0.15)
+                last10, last15, last20 = self.extract_last_means(series)
 
-                last5, last10, last15 = self.extract_last_means(series)
-                median_min = self.extract_median_extrema(series, "min")
-                median_max = self.extract_median_extrema(series, "max")
-                over_under = self.extract_over_under(series)
-
-                acc = []
-                if results_targeted:
-                    for v in results_targeted.values():
-                        acc.append({
-                            "score": v["value"],
-                            "equal": v["equal"],
-                            "prop": v["prop"]
-                        })
-
-                acc2 = []
-                for v in results_complete.values():
-                    acc2.append({
-                        "score": v["value"],
-                        "equal": v["equal"],
-                        "prop": v["prop"]
-                    })
+                sorted_series = sorted(series)
+                mid = len(sorted_series) // 2
+                min_vals = sorted_series[:mid] if mid > 0 else sorted_series
+                max_vals = sorted_series[mid:] if mid > 0 else sorted_series
 
                 data = {
-                    "last5": last5,
                     "last10": last10,
                     "last15": last15,
-                    "median_min_values": median_min,
-                    "median_max_values": median_max,
-                    "lr_correct_score": lin["prediction"],
-                    "pe_correct_score": peak["prediction"],
-                    "over_under": over_under,
-                    "accuracy": acc,
-                    "accuracy2": acc2
+                    "last20": last20,
+
+                    "median_min_values": min_vals,
+                    "median_max_values": max_vals,
+
+                    "lr_correct_score": lin['prediction'],
+                    "pe_correct_score": peak['prediction'],
+
+                    "over_under": divergenceT,
+
+                    "accuracy": [
+                        {"score": v["value"], "equal": v["equal"], "prop": v["prop"]}
+                        for v in results_targeted.values()
+                    ] if results_targeted else [],
+
+                    "accuracy2": [
+                        {"score": v["value"], "equal": v["equal"], "prop": v["prop"]}
+                        for v in results_complete.values()
+                    ] if results_complete else []
                 }
 
                 final_score = self.predict_score(data)
-                self.write_log(log, f"⚽ PREDICTED SCORE = {final_score}\n")
+                self.write_log(log, f"\n🏁 FINAL CORRECT SCORE = {final_score}\n")
+
             except Exception as e:
-                self.write_log(log, f"[MODEL ERROR] {e}\n")
-            # ==================
+                self.write_log(log, f"\n[ERROR predict_score] {e}\n")
 
+            # --- MODEL A 
+            score, _ = self.predict_score_from_seriesA(series, []) 
+            self.write_log(log, f"\n🎯 MODEL A= {score}\n")
 
-                
-            results_complete = self.motif_engine_complete2(series)
+            # --- MODEL B 
+            scoreB, metaB = self.predict_score_from_seriesB(series, [])
+
+            self.write_log(log, f"\n🎯 MODEL B= {scoreB}\n")
+            #self.write_log(log, "\nDETAILS:\n")
+            #self.write_log(log, f"• Recent mean (last 10) : {metaB.get('recent_mean')}\n")
+            #self.write_log(log, f"• Global median        : {metaB.get('global_median')}\n")
+            #self.write_log(log, f"• Base score           : {metaB.get('base_score')}\n")
+            #self.write_log(log, f"• Std deviation        : {metaB.get('std')}\n")
+
+            # --- MODEL C 
+            scoreC, metaC = self.predict_score_from_seriesC(series, opponent_series=opponent_series)
+            self.write_log(log, f"\n🎯 MODEL C= {scoreC}\n")           
+            #self.write_log(log, "\nDETAILS:\n")
+            #self.write_log(log, f"• Recent mean (last 10) : {metaC.get('recent_mean')}\n")
+            #self.write_log(log, f"• Global median        : {metaC.get('global_median')}\n")
+            #self.write_log(log, f"• Base score           : {metaC.get('base_score')}\n")
+            #self.write_log(log, f"• Std deviation        : {metaC.get('std')}\n\n")
+
+            # --- MODEL D
+            scoreD = self.predict_score_from_seriesD(series)
+            self.write_log(log, f"\n🎯 MODEL D = {scoreD}\n")
+
+            # --- MODEL E
+            scoreE = self.predict_score_from_seriesE(series)
+            self.write_log(log, f"\n🎯 MODEL E = {scoreE}\n")
+
+            #
             self.write_log(log, "\n📊 ACCURACY 2:\n")
             for k, v in results_complete.items():
                 self.write_log(
@@ -1790,8 +1921,7 @@ class FlashscoreApp(tk.Tk):
                     f"⚽={v['value']:<3} | {k:<2} | equal={v['equal']:<3} | prop={v['prop']:<3}\n"
                 )
             
-            divergence = self.decide_divergence2(results_complete)
-            self.write_log(log,f"⚽ could be: {divergence}.\n")
+            self.write_log(log,f"⚽ could be: {divergenceT}.\n")
             
             self.write_log(log, "\n📊 ACCURACY:\n")
             results_targeted = self.motif_engine_targeted_with_cr2(series, tol=0.15)
@@ -1802,13 +1932,7 @@ class FlashscoreApp(tk.Tk):
                         f"⚽={v['value']:<3} | {k:<2} | equal={v['equal']:<3} | prop={v['prop']:<3}\n"
                     )
 
-            divergenceT = self.decide_divergence_targeted(results_targeted)
-
             self.write_log(log,f"⚽ could be: {divergenceT}.\n")
-
-            lin = self.linear_rebound_prediction(series)
-            peak = self.peak_envelope_linear_prediction(series)
-            avg_rem = self.compute_average_remaining(series)
 
             self.write_log(log, f"\n📊 🎯OVER LINEAR REBOUND🎯\n")
             self.write_log(log,
@@ -1827,32 +1951,17 @@ class FlashscoreApp(tk.Tk):
                     f"CORRECT SCORE ⚽= {b.get('average_remaining',0):.3f}\n"
                 )
 
-            self.compute_over_under_full(series, log)
-
             self.display_recent_averages(series,log)
                 
             self.display_median_extrema_means(series,log,"min")
             self.display_median_extrema_means(series,log,"max")
 
-            self.write_log(log,"\n📊 GLOBAL LOT / FEW GOALS PROB:\n")
+        opponent_series=seriesC
+        write_lower(seriesA, resultA, self.log_teamA_1, "TEAM A")
 
-            zero_seq,zero_signal,last_zero=self.analyze_zero_pattern(series)
-            if zero_seq:
-                if len(zero_seq)<3:self.write_log(log,"X\n")
-                else:self.write_log(log,f"⚽= {zero_signal} {last_zero}\n")
-
-            self.detect_over_probable(series, log)
-            
-            self.check_over_probability_hybrid(series, log)
-
-            self.write_log(log,"\n📊 Consecutives 0 & 1:\n")
-            self.display_consecutive_stats(series,log)
-
-
-
-        write_lower(seriesA,resultA,self.log_teamA_1)
-        write_lower(seriesC,resultC,self.log_teamC_1)
-            
+        opponent_series=seriesA
+        write_lower(seriesC, resultC, self.log_teamC_1, "TEAM C")
+                            
     def prev_csv(self):
         if self.current_index>0:
             self.current_index-=1
