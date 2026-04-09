@@ -21,7 +21,7 @@ In "PREDICTOR(F4).py": you can export message error to a texte file(save_error_t
 
 You will find:
 -14 CSV files with results.
--6 Python scripts: 2 predictors(main predictor(F4) + DRAW AND CORECT SCORE DETECTOR.py and 3 scrapers.
+-6 Python scripts: 2 predictors(Predictor(F4) + PREDICTOR_DRAW_CS and 3 scrapers.
 -1 sh file
 -Readme.
 
