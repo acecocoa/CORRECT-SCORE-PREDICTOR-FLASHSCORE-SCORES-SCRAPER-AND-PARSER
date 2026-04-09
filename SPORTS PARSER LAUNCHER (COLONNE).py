@@ -10,10 +10,11 @@ VENV_DIR = os.path.join(BASE_DIR, "venv_flashscore")
 PYTHON_VENV = os.path.join(VENV_DIR, "bin", "python3")
 
 SCRIPT_0 = "FLASHSCORE TODAY SCRAPER.py"
+SCRIPT_10 = "FLASHSCORE TODAY SCRAPER(LIMIT).py"
 SCRIPT_1 = "FLASHSCORE LEAGUE SCRAPER.py"
 SCRIPT_11 = "FLASHSCORE MATCH SCRAPER.py"
 SCRIPT_2 = "PREDICTOR(F4)(short).py"
-SCRIPT_4 = "PREDICTOR(F4)(CORRECT SCORE).py"
+SCRIPT_4 = "PREDICTOR_DRAW_CS.py"
 
 REQUIREMENTS = [
     "pip",
@@ -124,6 +125,15 @@ btn0 = ctk.CTkButton(
 )
 btn0.pack(pady=20)
 
+btn10 = ctk.CTkButton(
+    app,
+    text="TODAY SCRAPER(LIMIT)",
+    height=60,
+    font=("Arial", 18),
+    command=lambda: run_script(SCRIPT_10)
+)
+btn10.pack(pady=20)
+
 btn1 = ctk.CTkButton(
     app,
     text="LEAGUES SCRAPER",
@@ -160,7 +170,7 @@ btn2.pack(pady=20)
 
 btn4 = ctk.CTkButton(
     app,
-    text="CORRECT SCORE (F4)", 
+    text="PREDICTOR DRAW_CS", 
     height=60,
     font=("Arial", 18),
     command=lambda: run_script(SCRIPT_4)
