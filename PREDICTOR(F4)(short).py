@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import traceback,csv,os,shutil,subprocess,sys,math,statistics
+from scipy.signal import hilbert, find_peaks
+from sklearn.linear_model import LinearRegression
+import traceback,csv,os,shutil,subprocess,sys,math,statistics,pywt
 from datetime import datetime
 from typing import List, Optional, Tuple, Dict
 import pandas as pd
@@ -9,6 +11,9 @@ from tkinter import ttk,messagebox,simpledialog
 from collections import Counter
 from itertools import combinations
 import numpy as np
+
+WINDOW_SIZES = [1, 2]
+WINDOW_SIZES2 = [1, 4]
 
 DEFAULT_SCORES={}
 EXPORT_DIR="export_csv"
@@ -77,18 +82,6 @@ class FlashscoreApp(tk.Tk):
         self.teamC_scores:List[str]=[]
         self.motif_next_distance=0
 
-        self.motif_configs=[
-            ("0= OVER",2,30),("0= OVER",3,30),("0= OVER",4,30),("0= OVER",5,30),
-            ("0= OVER",6,30),("0= OVER",2,60),("(-)= OVER",3,60),("(-)= OVER",4,60),
-            ("(-)= OVER",5,60),("(-)= OVER",6,60),("(-)= OVER",2,10),("(-)= OVER",2,20),
-            ("(-)= OVER",2,40),("(-)= OVER",2,50),("(-)= OVER",2,70),
-        ]
-
-        self.motif_configs2=[
-            ("1.B",2,3),("2.T",3,4),("3.T",4,5),("4.T",5,6),("5.L",3,6),
-            ("6.B",6,7),("7.T",7,8),("8.T",8,9),("9.T",9,10),("0.T",10,11),
-        ]
-
         self.csv_files:List[str]=[]
         self.loaded_csv_path:Optional[str]=None
         self.csv_loaded=False
@@ -108,7 +101,199 @@ class FlashscoreApp(tk.Tk):
             self.loaded_csv_path=path
             self.load_csv()
             self.run_prediction()
-            
+
+    def arround_last_features_pattern(self, series, window_size):
+        FEATURE_LIST = [
+            "Lin","Peak",
+            "HilbertMax","HilbertMean",
+            "EMDMax","EMDMean",
+            "WaveletMax","WaveletMean",
+            "PeakFilteredMax","PeakFilteredMean"
+        ]
+
+        series = np.array(series[:-1])
+        L = len(series)
+
+        if L < window_size + 2:
+            return {k: "X" for k in FEATURE_LIST}
+
+        last_val = series[-(window_size + 1)]
+        all_indices = np.where(series == last_val)[0]
+
+        segments = []
+        targets = []
+
+        for idx in all_indices:
+            start = idx + 1
+            end = idx + 1 + window_size
+            target = idx + window_size + 1
+
+            if end <= L and target < L:
+                segments.append(series[start:end])
+                targets.append(series[target])
+
+        if len(segments) == 0:
+            return {k: "X" for k in FEATURE_LIST}
+
+        segments = np.array(segments)
+        targets = np.array(targets)
+
+        ref_segment = segments[-1]
+
+        mask = np.all(segments == ref_segment, axis=1)
+
+        segments = segments[mask]
+        targets = targets[mask]
+
+        if len(segments) == 0:
+            return {k: "X" for k in FEATURE_LIST}
+
+        y = targets.reshape(-1, 1)
+        x = np.arange(len(y)).reshape(-1, 1)
+
+        lin_coef = LinearRegression().fit(x, y).coef_[0][0]
+        peak_env = y.max() - y.min()
+
+        hilbert_env = np.abs(hilbert(segments, axis=1))
+        hilbert_max = np.max(hilbert_env)
+        hilbert_mean = hilbert_env.mean()
+
+        detrended = segments - segments.mean(axis=1, keepdims=True)
+        emd_env = np.abs(hilbert(detrended, axis=1))
+        emd_max = np.max(emd_env)
+        emd_mean = emd_env.mean()
+
+        wav_envs = np.array([
+            np.abs(pywt.upcoef('a', pywt.wavedec(seg,'db4',1)[0], 'db4', level=1, take=len(seg)))
+            for seg in segments
+        ])
+        wav_max = np.max(wav_envs)
+        wav_mean = wav_envs.mean()
+
+        peak_envs = []
+        for seg in segments:
+            peaks, _ = find_peaks(seg)
+            if len(peaks) > 0:
+                env = np.interp(np.arange(len(seg)), peaks, seg[peaks])
+            else:
+                env = np.zeros(len(seg))
+            peak_envs.append(env)
+
+        peak_envs = np.array(peak_envs)
+
+        peak_filtered_max = np.max(peak_envs)
+        peak_filtered_mean = peak_envs.mean()
+
+        return {
+            "Lin": lin_coef,
+            "Peak": peak_env,
+            "HilbertMax": hilbert_max,
+            "HilbertMean": hilbert_mean,
+            "EMDMax": emd_max,
+            "EMDMean": emd_mean,
+            "WaveletMax": wav_max,
+            "WaveletMean": wav_mean,
+            "PeakFilteredMax": peak_filtered_max,
+            "PeakFilteredMean": peak_filtered_mean
+        }
+
+    def arround_last_features(self, series, window_size, n_occurrences=None):
+        segments, targets = self.get_non_overlapping_future_segments(series, window_size)
+
+        if len(segments) == 0:
+            return {
+                "Lin": 0, "Peak": 0,
+                "HilbertMax": 0, "HilbertMean": 0,
+                "EMDMax": 0, "EMDMean": 0,
+                "WaveletMax": 0, "WaveletMean": 0,
+                "PeakFilteredMax": 0, "PeakFilteredMean": 0
+            }
+
+        if n_occurrences is not None:
+            segments = segments[-n_occurrences:]
+            targets = targets[-n_occurrences:]
+
+        y = targets.reshape(-1, 1)
+        x = np.arange(len(y)).reshape(-1, 1)
+
+        lin_coef = LinearRegression().fit(x, y).coef_[0][0]
+        peak_env = y.max() - y.min()
+
+        hilbert_env = np.abs(hilbert(segments, axis=1))
+        hilbert_max = np.max(hilbert_env)
+        hilbert_mean = hilbert_env.mean()
+
+        detrended = segments - segments.mean(axis=1, keepdims=True)
+        emd_env = np.abs(hilbert(detrended, axis=1))
+        emd_max = np.max(emd_env)
+        emd_mean = emd_env.mean()
+
+        wav_envs = np.array([
+            np.abs(pywt.upcoef('a', pywt.wavedec(seg, 'db4', 1)[0], 'db4', level=1, take=len(seg)))
+            for seg in segments
+        ])
+        wav_max = np.max(wav_envs)
+        wav_mean = wav_envs.mean()
+
+        peak_envs = []
+        for seg in segments:
+            peaks, _ = find_peaks(seg)
+            if len(peaks) > 0:
+                env = np.interp(np.arange(len(seg)), peaks, seg[peaks])
+            else:
+                env = np.zeros(len(seg))
+            peak_envs.append(env)
+
+        peak_envs = np.array(peak_envs)
+        peak_filtered_max = np.max(peak_envs)
+        peak_filtered_mean = peak_envs.mean()
+
+        return {
+            "Lin": lin_coef,
+            "Peak": peak_env,
+            "HilbertMax": hilbert_max,
+            "HilbertMean": hilbert_mean,
+            "EMDMax": emd_max,
+            "EMDMean": emd_mean,
+            "WaveletMax": wav_max,
+            "WaveletMean": wav_mean,
+            "PeakFilteredMax": peak_filtered_max,
+            "PeakFilteredMean": peak_filtered_mean
+        }
+
+    def get_non_overlapping_future_segments(self, series, window_size):
+        #series = np.array(series)
+        series = np.array(series[:-1])
+
+        if len(series) < window_size + 2:
+            return np.array([])
+
+        last_val = series[-(window_size + 1)]
+        all_indices = np.where(series == last_val)[0]
+
+        selected_indices = []
+        last_taken = -np.inf
+        min_gap = window_size + 1
+
+        for idx in all_indices:
+            if idx - last_taken >= min_gap:
+                selected_indices.append(idx)
+                last_taken = idx
+
+        segments = []
+        targets = []
+
+        for idx in selected_indices:
+            start = idx + 1
+            end = idx + 1 + window_size
+            target = idx + window_size + 1
+
+            if end <= len(series) and target < len(series):
+                segments.append(series[start:end])
+                targets.append(series[target])
+
+        return np.array(segments), np.array(targets)
+    
     def motif_engine_complete2(self, series, tol=0.15):
         results = {}
         if len(series) < 10: return results
@@ -222,42 +407,6 @@ class FlashscoreApp(tk.Tk):
 
         return list(results.values())[0]['value']
 
-    def detect_target_motif_prediction_disorder(self,series,motif_length,block_size,motif_type):
-        if motif_type is None: motif_type="croissant"
-        if len(series)<block_size: return {"motif_cible":None,"similar_blocks":[],"prediction":None}
-        bloc_cible=series[-block_size:]; bloc15=bloc_cible[:-1]; motif_main=[]
-        if motif_type in ["croissant","decroissant"]:
-            for start in range(len(bloc15)-motif_length+1):
-                candidate=bloc15[start:start+motif_length]
-                if motif_type=="croissant" and all(candidate[i]<candidate[i+1] for i in range(motif_length-1)):
-                    motif_main=candidate; break
-                elif motif_type=="decroissant" and all(candidate[i]>candidate[i+1] for i in range(motif_length-1)):
-                    motif_main=candidate; break
-        elif motif_type=="proportionnel":
-            for start in range(len(bloc15)-motif_length+1):
-                candidate=bloc15[start:start+motif_length]; diffs=[candidate[i+1]-candidate[i] for i in range(len(candidate)-1)]
-                if all(diffs[i]*diffs[0]>0 for i in range(1,len(diffs))):
-                    ratios=[diffs[i]/diffs[0] for i in range(1,len(diffs))]
-                    if all(abs(r-1.0)<1e-6 for r in ratios): motif_main=candidate; break
-        if not motif_main: return {"motif_cible":None,"similar_blocks":[],"prediction":None}
-        similar_blocks=[]; delta_cible=[motif_main[i+1]-motif_main[i] for i in range(len(motif_main)-1)]
-        for i in range(len(series)-block_size):
-            bloc=series[i:i+block_size]; bloc15_histo=bloc[:-1]
-            var_values=bloc15_histo[-motif_length:]; delta_bloc=[var_values[j+1]-var_values[j] for j in range(len(var_values)-1)]
-            if motif_type=="proportionnel":
-                if all(d!=0 for d in delta_cible) and all(d!=0 for d in delta_bloc):
-                    ratios=[delta_bloc[j]/delta_cible[j] for j in range(len(delta_cible))]
-                    if max(ratios)-min(ratios)<1e-6: similar_blocks.append(bloc)
-            elif delta_bloc==delta_cible: similar_blocks.append(bloc)
-        if similar_blocks:
-            followers=[bloc[-1] for bloc in similar_blocks]; n=len(followers)
-            if n%2==1: center=n//2; weights=[i-center for i in range(n)]
-            else: mid_left=n//2-1; mid_right=n//2; weights=[i-mid_left if i<=mid_left else i-mid_right for i in range(n)]
-            evolution=sum(followers[i]*weights[i] for i in range(n))/n
-            prediction=motif_main[-1]+evolution
-        else: prediction=None
-        return {"motif_cible":motif_main,"similar_blocks":similar_blocks,"prediction":prediction}
-
     def analyze_zero_pattern(self,series):
         zero_sequences=[]; i=0; n=len(series)
         while i<n:
@@ -279,385 +428,6 @@ class FlashscoreApp(tk.Tk):
         for L in lengths:
             avg.append(f"Last{L}={sum(series_data[-L:])/L:.2f}" if len(series_data)>=L else f"Last{L}=N/A")
         self.write_log(log_widget,f"\n📊 LAST MEANS : {' | '.join(avg)}\n")
-
-    def fully_static_method_pattern0(self, series, motif_length, block_size, motif_next_distance=0):
-        series_data = series[:-1]
-        base_pred = series[-1]
-        n = len(series_data)
-        last_bloc = series_data[-block_size:]
-        max_val = max(last_bloc)
-        min_val = min(last_bloc)
-
-        target_motif = last_bloc[:motif_length]
-
-        def weighted_linear_regression(values):
-            n_vals = len(values)
-            if n_vals < 2: return sum(values)
-            x = list(range(n_vals))
-            y = values
-            w = [n_vals - i for i in range(n_vals)]
-            sum_w = sum(w)
-            sum_wx = sum(w[i] * x[i] for i in range(n_vals))
-            sum_wy = sum(w[i] * y[i] for i in range(n_vals))
-            sum_wxx = sum(w[i] * x[i] * x[i] for i in range(n_vals))
-            sum_wxy = sum(w[i] * x[i] * y[i] for i in range(n_vals))
-            denom = sum_w * sum_wxx - sum_wx * sum_wx
-            if denom == 0: return sum(values)
-            slope = (sum_w * sum_wxy - sum_wx * sum_wy) / denom
-            intercept = (sum_wy - slope * sum_wx) / sum_w
-            return intercept + slope * n_vals
-
-        def remove_farthest_occurrence(value):
-            idx = [i for i, v in enumerate(last_bloc) if v == value]
-            if not idx: return None
-            motif = target_motif.copy()
-            if value in motif:
-                motif.remove(value)
-                return motif
-            return None
-
-        motif_excl_max = remove_farthest_occurrence(max_val)
-        motif_excl_min = remove_farthest_occurrence(min_val)
-
-        search_zones = []
-        for i in range(0, n - block_size, block_size):
-            sim_bloc = series_data[i:i + block_size]
-            if i + block_size < n:
-                search_zones.append((i, sim_bloc, series_data[i + block_size]))
-
-        store = {f"pred_results{i}": [] for i in range(1, 8)}
-
-        def ordered_match(sim_bloc, motif):
-            pos = 0
-            for v in sim_bloc:
-                if pos < len(motif) and v == motif[pos]:
-                    pos += 1
-            return pos == len(motif)
-
-        def delta_calc(i, corres_next):
-            return max(0, corres_next - i)
-
-        for i, sim_bloc, corres_next in search_zones:
-            delta = delta_calc(i, corres_next)
-            matched = False
-
-            if ordered_match(sim_bloc, target_motif):
-                store["pred_results1"].append(delta)
-                matched = True
-
-            if not matched:
-                sum_target = sum(target_motif)
-                ratio = sum(sim_bloc) / sum_target if sum_target != 0 else 1
-                if ratio > 1 or (0 < ratio < 1):
-                    store["pred_results2"].append(delta)
-                    matched = True
-
-            if motif_excl_max and ordered_match(sim_bloc, motif_excl_max):
-                store["pred_results4"].append(delta)
-            if motif_excl_min and ordered_match(sim_bloc, motif_excl_min):
-                store["pred_results5"].append(delta)
-            if motif_excl_max and ordered_match(sim_bloc, motif_excl_max) and delta not in store["pred_results4"]:
-                store["pred_results6"].append(delta)
-            if motif_excl_min and ordered_match(sim_bloc, motif_excl_min) and delta not in store["pred_results5"]:
-                store["pred_results7"].append(delta)
-
-        pred_results3 = store["pred_results1"] + store["pred_results2"]
-        pred_results12 = pred_results3 + store["pred_results4"] + store["pred_results5"] + store["pred_results6"] + store["pred_results7"]
-        combined_map = {3: pred_results3, 12: pred_results12}
-
-        def stats(lst):
-            if not lst:
-                return {"prediction": 0, "count": 0}
-            return {"prediction": weighted_linear_regression(lst), "count": len(lst)}
-
-        final_results = {}
-        for i in range(1, 8):
-            final_results[f"pred_results{i}"] = stats(store[f"pred_results{i}"])
-        for k, v in combined_map.items():
-            final_results[f"pred_results{k}"] = stats(v)
-
-        return final_results
-
-    def fully_static_method_pattern1(self, series, motif_length, block_size, motif_next_distance, used_global=None):
-        if used_global is None:
-            used_global = set()
-
-        series_data = series[:-1]
-        n = len(series_data)
-        last_bloc = series_data[-block_size:]
-        base_pred = series[-1]
-
-        target_motif = last_bloc[:motif_length]
-
-        sim_blocs_list = []
-        corres_next_list = []
-        for i in range(0, n - block_size, block_size):
-            sim_blocs_list.append(series_data[i:i + block_size])
-            corres_next_list.append(series_data[i + block_size:i + block_size + 1])
-
-        pr1, pr2, pr4, pr5 = [], [], [], []
-        pr3, pr6, pr7 = [], [], []
-
-        used_patterns_12 = set()
-        used_patterns_45 = set()
-
-        def check(sim, target):
-            for i in range(len(sim) - len(target) + 1):
-                if sim[i:i+len(target)] == target:
-                    return True
-            return False
-
-        target_mean = sum(target_motif) / motif_length if motif_length > 0 else 0
-
-        for i, sim in enumerate(sim_blocs_list):
-            corres = corres_next_list[i][0] if corres_next_list[i] else None
-            if corres is None:
-                continue
-
-            motif_id = tuple(sim)
-
-            if motif_id in used_global:
-                continue
-
-            d = abs(corres - base_pred)
-
-            if check(sim, target_motif):
-                if d == motif_next_distance:
-                    pr1.append((motif_id, d))
-                    used_patterns_12.add(motif_id)
-                    used_global.add(motif_id)
-            else:
-                sim_mean = sum(sim) / len(sim) if len(sim) > 0 else 0
-                ratio = sim_mean / target_mean if target_mean != 0 else 1
-
-                if ratio > 1 or (0 < ratio < 1):
-                    pr2.append((motif_id, d))
-                    used_patterns_12.add(motif_id)
-                    used_global.add(motif_id)
-
-        for sim in sim_blocs_list:
-            motif_id = tuple(sim)
-
-            if motif_id in used_global:
-                continue
-
-            if max(sim) > target_mean:
-                pr4.append((motif_id, max(sim)))
-                used_patterns_45.add(motif_id)
-                used_global.add(motif_id)
-            elif min(sim) < target_mean:
-                pr5.append((motif_id, min(sim)))
-                used_patterns_45.add(motif_id)
-                used_global.add(motif_id)
-
-        candidate_mx2, candidate_mn2 = [], []
-
-        for sim in sim_blocs_list:
-            motif_id = tuple(sim)
-
-            if motif_id in used_global:
-                continue
-
-            if motif_id in used_patterns_45:
-                continue
-
-            if max(sim) > target_mean:
-                candidate_mx2.append((motif_id, max(sim)))
-            elif min(sim) < target_mean:
-                candidate_mn2.append((motif_id, min(sim)))
-
-        pr6 = [d for _, d in candidate_mx2]
-        pr7 = [d for _, d in candidate_mn2]
-
-        pr3 = [d for _, d in pr1 + pr2]
-
-        def make_result(arr):
-            count = len(arr)
-            s = sum(arr)
-            pred = s / count if count > 0 else 0
-            return {"sum": s, "count": count, "prediction": pred}
-
-        return {
-            "pred_results1": make_result([d for _, d in pr1]),
-            "pred_results2": make_result([d for _, d in pr2]),
-            "pred_results3": make_result(pr3),
-            "pred_results4": make_result([d for _, d in pr4]),
-            "pred_results5": make_result([d for _, d in pr5]),
-            "pred_results6": make_result(pr6),
-            "pred_results7": make_result(pr7),
-        }
-
-    def fully_static_method_pattern11(self, series, motif_length, block_size, motif_next_distance, used_global=None):
-        if used_global is None:
-            used_global = set()
-
-        series_data = series[:-1]
-        n = len(series_data)
-        if n < block_size:
-            return {f"pred_results{i}": {"sum": 0, "count": 0, "prediction": 0} for i in range(1, 8)}
-
-        last_bloc = series_data[-block_size:]
-        base_pred = series[-1]
-
-        target_motif = last_bloc[:motif_length]
-
-        sim_blocs_list = []
-        corres_next_list = []
-        for i in range(0, n - block_size, block_size):
-            sim_blocs_list.append(series_data[i:i + block_size])
-            corres_next_list.append(series_data[i + block_size:i + block_size + 1])
-
-        pr1, pr2, pr4, pr5 = [], [], [], []
-        used_patterns_12 = set()
-        used_patterns_45 = set()
-
-        def check(sim, target):
-            for i in range(len(sim) - len(target) + 1):
-                if sim[i:i+len(target)] == target:
-                    return True
-            return False
-
-        target_mean = sum(target_motif) / motif_length if motif_length > 0 else 0
-
-        for i, sim in enumerate(sim_blocs_list):
-            corres = corres_next_list[i][0] if corres_next_list[i] else None
-            if corres is None:
-                continue
-
-            motif_id = tuple(sim)
-            if motif_id in used_global:
-                continue
-
-            d = abs(corres - base_pred)
-
-            if check(sim, target_motif):
-                if d == motif_next_distance:
-                    pr1.append(d)
-                    used_patterns_12.add(motif_id)
-                    used_global.add(motif_id)
-            else:
-                sim_mean = sum(sim) / len(sim) if len(sim) > 0 else 0
-                ratio = sim_mean / target_mean if target_mean != 0 else 1
-                if ratio != 1:
-                    pr2.append(sim_mean) 
-                    used_patterns_12.add(motif_id)
-                    used_global.add(motif_id)
-
-        for sim in sim_blocs_list:
-            motif_id = tuple(sim)
-            if motif_id in used_global or motif_id in used_patterns_12:
-                continue
-
-            if max(sim) > target_mean:
-                pr4.append(max(sim))
-                used_patterns_45.add(motif_id)
-                used_global.add(motif_id)
-            elif min(sim) < target_mean:
-                pr5.append(min(sim))
-                used_patterns_45.add(motif_id)
-                used_global.add(motif_id)
-
-        candidate_mx2 = [max(sim) for sim in sim_blocs_list
-                         if tuple(sim) not in used_global and tuple(sim) not in used_patterns_45 and max(sim) > target_mean]
-        candidate_mn2 = [min(sim) for sim in sim_blocs_list
-                         if tuple(sim) not in used_global and tuple(sim) not in used_patterns_45 and min(sim) < target_mean]
-
-        pr3 = pr1 + pr2
-        pr6 = candidate_mx2
-        pr7 = candidate_mn2
-
-        def make_result(arr, use_mean=False):
-            count = len(arr)
-            s = int(round(sum(arr))) if arr else 0
-            pred = int(round(sum(arr) / count)) if use_mean and count > 0 else s
-            return {"sum": s, "count": count, "prediction": pred}
-
-        return {
-            "pred_results1": make_result(pr1),
-            "pred_results2": make_result(pr2, use_mean=True),
-            "pred_results3": make_result(pr3),
-            "pred_results4": make_result(pr4),
-            "pred_results5": make_result(pr5),
-            "pred_results6": make_result(pr6),
-            "pred_results7": make_result(pr7),
-        }
-
-    def fully_static_method_pattern2(self, series, motif_length, block_size, motif_next_distance=0):
-        series_data = series[:-1]
-        n = len(series_data)
-        last_bloc = series_data[-block_size:]
-        min_val, max_val = min(last_bloc), max(last_bloc)
-
-        target_motif = last_bloc[:motif_length]
-
-        def remove_far(value):
-            idx = [i for i, v in enumerate(last_bloc) if v == value]
-            if not idx: return None
-            motif = target_motif.copy()
-            if value in motif:
-                motif.remove(value)
-                return motif
-            return None
-
-        motif_excl_max = remove_far(max_val)
-        motif_excl_min = remove_far(min_val)
-
-        search = []
-        for i in range(0, n - block_size, block_size):
-            sim = series_data[i:i + block_size]
-            if i + block_size < n:
-                search.append((i, sim, series_data[i + block_size]))
-
-        store = {f"pred_results{i}": [] for i in range(1, 8)}
-
-        def ordered(sim, motif):
-            pos = 0
-            for v in sim:
-                if pos < len(motif) and v == motif[pos]:
-                    pos += 1
-            return pos == len(motif)
-
-        def delta(i, nxt):
-            return max(0, nxt - i)
-
-        for i, sim, nxt in search:
-            d = delta(i, nxt)
-            matched = False
-
-            if ordered(sim, target_motif):
-                store["pred_results1"].append(d)
-                matched = True
-
-            if not matched:
-                ratio = sum(sim) / sum(target_motif) if sum(target_motif) != 0 else 1
-                if ratio > 1 or (0 < ratio < 1):
-                    store["pred_results2"].append(d)
-                    matched = True
-
-            if motif_excl_max and ordered(sim, motif_excl_max):
-                store["pred_results4"].append(d)
-            if motif_excl_min and ordered(sim, motif_excl_min):
-                store["pred_results5"].append(d)
-            if motif_excl_max and ordered(sim, motif_excl_max) and d not in store["pred_results4"]:
-                store["pred_results6"].append(d)
-            if motif_excl_min and ordered(sim, motif_excl_min) and d not in store["pred_results5"]:
-                store["pred_results7"].append(d)
-
-        def stats(lst):
-            if not lst:
-                return {"linear_rebound": 0, "peak_envelope": 0, "count": 0}
-            lin = self.linear_rebound_prediction(lst)
-            peak = self.peak_envelope_linear_prediction(lst)
-            return {"linear_rebound": lin["prediction"], "peak_envelope": peak["prediction"], "count": len(lst)}
-
-        final = {}
-        for i in range(1, 8):
-            final[f"pred_results{i}"] = stats(store[f"pred_results{i}"])
-
-        combined = store["pred_results1"] + store["pred_results2"] + store["pred_results4"] + store["pred_results5"] + store["pred_results6"] + store["pred_results7"]
-        final["pred_results12"] = stats(combined)
-
-        return final
 
     def linear_rebound_prediction(self, series, window=6):
         series = series[:-1]
@@ -875,231 +645,167 @@ class FlashscoreApp(tk.Tk):
                 self.write_log(log_widget,f"{mean_size} in {zone_size} : {avg:.2f}\n")
             else:self.write_log(log_widget,f"{mean_size} in {zone_size} : N/A\n")
 
-    def predict_score_from_seriesA(self, seriesA, seriesC):     
-        def compute(s):
-            s = np.array(s[:-1]) if len(s) > 1 else np.array(s)
+    def _clean(self, s):
+        return np.array(s[:-1]) if len(s) > 1 else np.array(s)
 
-            if len(s) == 0:
-                return {
-                    "mean": 0.0,
-                    "recent5": 0.0,
-                    "recent3": 0.0,
-                    "std": 0.0,
-                    "momentum": 0.0
-                }
+    def _safe_mean(self, s):
+        return np.mean(s) if len(s) else 0.0
 
-            mean = np.mean(s)
-            recent5 = np.mean(s[-5:]) if len(s) >= 5 else mean
-            recent3 = np.mean(s[-3:]) if len(s) >= 3 else mean
-            std = np.std(s)
-            momentum = recent5 - mean
+    def _window_mean(self, s, k, fallback=0.0):
+        return np.mean(s[-k:]) if len(s) >= k else fallback
 
-            return {
-                "mean": mean,
-                "recent5": recent5,
-                "recent3": recent3,
-                "std": std,
-                "momentum": momentum
-            }
+    def _std(self, s):
+        return np.std(s) if len(s) > 1 else 0.0
 
-        A = compute(seriesA)
-        C = compute(seriesC)
+    def _stats_basic(self, s):
+        s = self._clean(s)
+        if len(s) == 0:
+            return {"mean": 0, "recent5": 0, "recent3": 0, "std": 0, "momentum": 0}
 
-        baseA = A["mean"] + 0.6 * A["recent5"] + 0.2 * A["recent3"]
-        baseC = C["mean"] + 0.6 * C["recent5"] + 0.2 * C["recent3"]
+        mean = np.mean(s)
+        r5 = self._window_mean(s, 5, mean)
+        r3 = self._window_mean(s, 3, mean)
+        std = np.std(s)
+        momentum = r5 - mean
 
-        instabilityA = -1.0 * A["std"]
-        instabilityC = -1.0 * C["std"]
+        return {"mean": mean, "recent5": r5, "recent3": r3, "std": std, "momentum": momentum}
 
-        opp_instability_A = +0.8 * C["std"]
-        opp_instability_C = +0.8 * A["std"]
+    def predict_score_from_seriesA(self, seriesA, seriesC):
+        A, C = self._stats_basic(seriesA), self._stats_basic(seriesC)
 
-        opp_strength_A = -0.7 * C["mean"]
-        opp_strength_C = -0.7 * A["mean"]
+        def base(x):
+            return x["mean"] + 0.6 * x["recent5"] + 0.2 * x["recent3"]
 
-        momentumA = 0.3 * A["momentum"]
-        momentumC = 0.3 * C["momentum"]
+        scoreA = (
+            base(A)
+            - A["std"] + 0.8 * C["std"]
+            - 0.7 * C["mean"]
+            + 0.3 * A["momentum"]
+        )
 
-        scoreA = baseA + instabilityA + opp_instability_A + opp_strength_A + momentumA
-        scoreC = baseC + instabilityC + opp_instability_C + opp_strength_C + momentumC
+        scoreC = (
+            base(C)
+            - C["std"] + 0.8 * A["std"]
+            - 0.7 * A["mean"]
+            + 0.3 * C["momentum"]
+        )
 
-        scoreA = round(max(0, min(scoreA, 10)), 2)
-        scoreC = round(max(0, min(scoreC, 10)), 2)
+        clamp = lambda x: round(max(0, min(x, 10)), 2)
 
-        scoreA_str = f"{scoreA:.2f}"
-        scoreC_str = f"{scoreC:.2f}"
-
-        return scoreA_str, scoreC_str
+        return f"{clamp(scoreA):.2f}", f"{clamp(scoreC):.2f}"
 
     def predict_score_from_seriesB(self, series, opponent_series=None):
         if not series or len(series) < 5:
             return "0.00", {"reason": "series too short"}
 
-        RECENT_WINDOW = 10
-        W_RECENT = 0.6
-        W_GLOBAL = 0.4
-        MAX_GOALS = 4
-        MIN_GOALS = 0
+        RECENT, W_R, W_G = 10, 0.6, 0.4
 
-        recent = series[-RECENT_WINDOW-1:-1]  
-        recent_mean = sum(recent) / len(recent)
-
-        sorted_series = sorted(series)
-        n = len(sorted_series)
-        idx_75 = int(0.75 * (n - 1))
-        global_75p = sorted_series[idx_75]
-
-        base_score = (W_RECENT * recent_mean) + (W_GLOBAL * global_75p)
+        recent = self._window_mean(series[-RECENT-1:-1], RECENT)
+        global_75 = sorted(series)[int(0.75 * (len(series) - 1))]
+        base = W_R * recent + W_G * global_75
 
         std = statistics.pstdev(series) if len(series) > 1 else 0
-        if std < 0.35:
-            base_score *= 0.95
-        elif std > 1.5:
-            base_score *= 1.05
+        base *= 0.95 if std < 0.35 else 1.05 if std > 1.5 else 1
 
         if opponent_series and len(opponent_series) >= 5:
-            opponent_mean = sum(opponent_series[-RECENT_WINDOW-1:-1]) / len(opponent_series[-RECENT_WINDOW-1:-1])
-        
-            if opponent_mean < 1.5:
-                base_score *= 1.15  
+            opp = self._window_mean(opponent_series[-RECENT-1:-1], RECENT)
+            base *= 1.15 if opp < 1.5 else 0.9 if opp > 2.5 else 1
 
-            elif opponent_mean > 2.5:
-                base_score *= 0.9
+        if hasattr(self, "current_team"):
+            base *= 1.05 if self.current_team == "A" else 0.95 if self.current_team == "C" else 1
 
-        if hasattr(self, 'current_team') and self.current_team in ['A', 'C']:
-            if self.current_team == 'A':
-                base_score *= 1.05  
-            elif self.current_team == 'C':
-                base_score *= 0.95  
-
-        final_score = round(base_score, 2)
-        final_score = max(MIN_GOALS, min(MAX_GOALS, final_score))
+        final = max(0, min(round(base, 2), 4))
 
         meta = {
-            "recent_mean": f"{recent_mean:.2f}",
-            "global_75p": f"{global_75p:.2f}",
-            "base_score": f"{base_score:.2f}",
+            "recent_mean": f"{recent:.2f}",
+            "global_75p": f"{global_75:.2f}",
+            "base_score": f"{base:.2f}",
             "std": f"{std:.2f}",
-            "final_score": f"{final_score:.2f}"
+            "final_score": f"{final:.2f}",
         }
 
-        return f"{final_score:.2f}", meta
+        return f"{final:.2f}", meta
 
     def predict_score_from_seriesC(self, series, opponent_series=None):
         if not series or len(series) < 5:
             return "0.00", {"reason": "series too short"}
 
-        RECENT_WINDOW = 10
-        MAX_GOALS = 4
-        MIN_GOALS = 0
+        RECENT, MAX_G = 10, 4
 
-        recent = series[-RECENT_WINDOW-1:-1] 
-        recent_mean = sum(recent) / len(recent)
+        recent = self._window_mean(series[-RECENT-1:-1], RECENT)
+        sorted_s = sorted(series)
+        g75 = sorted_s[int(0.75 * (len(sorted_s) - 1))]
 
-        sorted_series = sorted(series)
-        idx_75 = int(0.75 * (len(sorted_series) - 1))
-        global_75p = sorted_series[idx_75]
-
-        base_score = 0.6 * recent_mean + 0.4 * global_75p
+        base = 0.6 * recent + 0.4 * g75
 
         std = statistics.pstdev(series) if len(series) > 1 else 0
-        if std < 0.35:
-            base_score *= 0.95
-        elif std > 1.5:
-            base_score *= 1.05
+        base *= 0.95 if std < 0.35 else 1.05 if std > 1.5 else 1
 
-        opponent_mean = None
+        opp_mean = None
+
         if opponent_series and len(opponent_series) >= 5:
-            opponent_mean = sum(opponent_series[-RECENT_WINDOW-1:-1]) / len(opponent_series[-RECENT_WINDOW-1:-1])
+            opp_mean = self._window_mean(opponent_series[-RECENT-1:-1], RECENT)
 
-            if opponent_mean < 2.0:
-                boost_ratio = max(0, 2.0 - opponent_mean) / 2.0  
-                base_score = base_score + (MAX_GOALS - base_score) * boost_ratio
-            elif opponent_mean > 2.5:
-                base_score *= 0.85
+            if opp_mean < 2.0:
+                boost = max(0, 2.0 - opp_mean) / 2.0
+                base += (MAX_G - base) * boost
+            elif opp_mean > 2.5:
+                base *= 0.85
 
-        if opponent_mean is not None:
-            series_mean = sum(series[-RECENT_WINDOW:]) / len(series[-RECENT_WINDOW:])
-            diff = series_mean - opponent_mean
-            if diff > 0:
-                base_score *= 1 + min(diff / 1.5, 0.2)
-            elif diff < 0:
-                base_score *= 1 - min(-diff / 1.5, 0.2)
+        if opp_mean is not None:
+            s_mean = self._window_mean(series[-RECENT:], RECENT)
+            diff = s_mean - opp_mean
+            base *= 1 + min(diff / 1.5, 0.2) if diff > 0 else 1 - min(-diff / 1.5, 0.2)
 
-        final_score = round(base_score, 2)
-        final_score = max(MIN_GOALS, min(MAX_GOALS, final_score))
+        final = max(0, min(round(base, 2), MAX_G))
 
         meta = {
-            "recent_mean": f"{recent_mean:.2f}",
-            "global_75p": f"{global_75p:.2f}",
-            "base_score": f"{base_score:.2f}",
+            "recent_mean": f"{recent:.2f}",
+            "global_75p": f"{g75:.2f}",
+            "base_score": f"{base:.2f}",
             "std": f"{std:.2f}",
-            "final_score": f"{final_score:.2f}",
-            "opponent_mean": f"{opponent_mean:.2f}" if opponent_mean is not None else "N/A",
+            "final_score": f"{final:.2f}",
+            "opponent_mean": f"{opp_mean:.2f}" if opp_mean is not None else "N/A",
         }
 
-        return f"{final_score:.2f}", meta
-  
+        return f"{final:.2f}", meta
+
     def predict_score_from_seriesD(self, team_stats):
         if isinstance(team_stats, list):
-            series = team_stats[:-1]  
-            n = len(series)
-            mean = sum(series)/n if n else 0
-            recent3 = sum(series[-3:])/min(3,n) if n else 0
-            recent5 = sum(series[-5:])/min(5,n) if n else 0
-            recent10 = sum(series[-10:])/min(10,n) if n else 0
+            s = team_stats[:-1]
+            n = len(s)
+            if n:
+                team_stats = {
+                    "mean": sum(s)/n,
+                    "recent3": sum(s[-3:])/min(3,n),
+                    "recent5": sum(s[-5:])/min(5,n),
+                    "recent10": sum(s[-10:])/min(10,n),
+                    "rebond_lineaire": sum(s[i+1]-s[i] for i in range(n-1))/max(1,n-1),
+                    "peak_envelope": max(s)-min(s),
+                    "std": (sum((x - sum(s)/n)**2 for x in s)/n)**0.5,
+                }
+            else:
+                team_stats = dict.fromkeys(
+                    ["mean","recent3","recent5","recent10","rebond_lineaire","peak_envelope","std"], 0
+                )
 
-            rebond_lineaire = sum(series[i+1]-series[i] for i in range(n-1))/max(1,n-1) if n>=2 else 0
+        return f"{team_stats['mean'] + 0.5*team_stats['rebond_lineaire']:.2f}"
 
-            peak_envelope = max(series) - min(series) if n else 0
-
-            std = (sum((x - mean)**2 for x in series)/n)**0.5 if n else 0
-
-            team_stats = {
-                "mean": mean,
-                "recent3": recent3,
-                "recent5": recent5,
-                "recent10": recent10,
-                "rebond_lineaire": rebond_lineaire,
-                "peak_envelope": peak_envelope,
-                "std": std
-            }
-
-        mean = team_stats['mean']
-        recent3 = team_stats['recent3']
-        recent5 = team_stats['recent5']
-        recent10 = team_stats['recent10']
-        rebond = team_stats['rebond_lineaire']
-        peak = team_stats['peak_envelope']
-        std = team_stats.get('std', 0)
-
-        predicted_score = mean + 0.5*rebond
-        return f"{predicted_score:.2f}"
-        
     def predict_score_from_seriesE(self, series):
         if not series or len(series) < 5:
-            return "0.00" 
+            return "0.00"
 
-        series = series[:-1] 
+        s = series[:-1]
+        r5 = sum(s[-5:]) / 5
+        r10 = sum(s[-10:]) / min(10, len(s))
+        mean = sum(s) / len(s)
 
-        recent5 = sum(series[-5:]) / 5
-        recent10 = sum(series[-10:]) / min(10, len(series))
-        mean_val = sum(series) / len(series)
+        rebond = r5 - r10
 
-        rebond_lineaire = recent5 - recent10
+        score = 0.6*r5 + 0.3*r10 + 0.1*mean + 5*rebond
+        score += -0.5 if r5 < 0.8 else 0.5 if r5 > 1.8 else 0
 
-        score = 0.6 * recent5 + 0.3 * recent10 + 0.1 * mean_val
-
-        score += 5 * rebond_lineaire
-
-        if recent5 < 0.8:
-            score -= 0.5
-        elif recent5 > 1.8:
-            score += 0.5
-
-        score = max(0, min(score, 100))
-
-        return f"{score:.2f}"
+        return f"{max(0, min(score, 100)):.2f}"
 
     def _build_ui(self):
         top=ttk.Frame(self);top.pack(fill="x",padx=8,pady=6);top.columnconfigure(1,weight=1)
@@ -1145,13 +851,13 @@ class FlashscoreApp(tk.Tk):
         entry_score.bind("<FocusOut>",lambda e,t=team:self.save_team_score_to_csv(t))
 
         c1=ttk.Frame(frame);c1.pack(fill="both",expand=True)
-        log1=tk.Text(c1,height=15,width=60);log1.pack(side="left",fill="both",expand=True)
+        log1=tk.Text(c1,height=20,width=60);log1.pack(side="left",fill="both",expand=True)
         sb1=ttk.Scrollbar(c1,orient="vertical",command=log1.yview);sb1.pack(side="right",fill="y")
         log1.config(yscrollcommand=sb1.set)
         setattr(self,f"log_team{team}",log1)
 
         c2=ttk.Frame(frame);c2.pack(fill="both",expand=True)
-        log2=tk.Text(c2,height=35,width=60);log2.pack(side="left",fill="both",expand=True)
+        log2=tk.Text(c2,height=30,width=60);log2.pack(side="left",fill="both",expand=True)
         sb2=ttk.Scrollbar(c2,orient="vertical",command=log2.yview);sb2.pack(side="right",fill="y")
         log2.config(yscrollcommand=sb2.set)
         setattr(self,f"log_team{team}_1",log2)
@@ -1396,72 +1102,6 @@ class FlashscoreApp(tk.Tk):
         self.apply_csv_action()
         if self.csv_loaded:self.run_prediction()
 
-    def build_prediction_table(self,results_per_column):
-        row_keys=[("Id","pred_results1"),("Pr","pred_results2"),("Mx","pred_results4"),
-                  ("Mn","pred_results5"),("Mx2","pred_results6"),("Mn2","pred_results7")]
-
-        num_cols = len(results_per_column)
-        headers = [" "] + [str(i+1) for i in range(num_cols)]
-
-        cellw = 3
-        fmt = lambda x: f"{str(x):>{cellw}}"
-
-        def build_row(vals):
-            return "|".join(fmt(v) for v in vals) + "|"
-
-        lines = [build_row(headers)]
-        lines.append("-" * len(lines[0]))
-
-        for label, key in row_keys:
-            row = [label]
-            for col in results_per_column:
-                count = col[key]["count"]
-                pred = col[key]["prediction"]
-                if count == 0:
-                    row.append("X") 
-                else:
-                    row.append(classify_value(pred))
-
-            lines.append(build_row(row))
-
-        return "\n".join(lines)
-
-    def build_result_table(self, all_results):
-        rows = ["1Id", "2Pr", "4Mx", "5Mn"]
-        key_map = {
-            "1Id": "pred_results1",
-            "2Pr": "pred_results2",
-            "4Mx": "pred_results4",
-            "5Mn": "pred_results5"
-        }
-
-        cols = [cfg[0] for cfg in self.motif_configs2]
-        col_w = 3
-        cell = lambda v: str(v).center(col_w)
-        lines = []
-
-        header = "".ljust(col_w) + "".join("|" + cell(c) for c in cols) + "|"
-        lines.append(header)
-
-        for r in rows:
-            row = r.ljust(col_w)
-            for title in cols:
-                res = all_results.get(title, {})
-                key = key_map.get(r)
-                if not key or key not in res:
-                    v = ""
-                else:
-                    entry = res.get(key, {})
-                    count = entry.get("count", 0)
-                    prediction = entry.get("prediction", 0)
-                    prediction_rounded = int(round(prediction)) if count > 0 else "X"
-                    v = prediction_rounded
-                row += "|" + cell(v)
-            row += "|"
-            lines.append(row)
-        return "\n".join(lines)
-
-
     def display_motifs(self, series, motif, e_list, prop_superieur, prop_inferieur,
                        m_list, next_vals, rebounds, peaks, target, label_prefix,
                        linear_rebound_func, peak_envelope_func):
@@ -1482,36 +1122,6 @@ class FlashscoreApp(tk.Tk):
     def write_log(self,target,text):
         if hasattr(target,"insert"):target.insert(tk.END,text)
         else:target.write(text)
-
-    def log_motif_table(self, target, motif_configs, results):
-        col_width = 12
-
-        def write(text):
-            if hasattr(target, "insert"):
-                target.insert(tk.END, text)
-            else:
-                target.write(text)
-
-        header = " " * 3
-        for i, (title, _, _) in enumerate(motif_configs, 1):
-            header += f"|{str(i)+'°)':^{col_width}}"
-        write(header + "|\n")
-
-        separator = "-" * (3 + (col_width + 1) * len(motif_configs) + 1)
-        write(separator + "\n")
-
-        labels = ["C", "D", "P"]
-        keys = ["croissant", "decroissant", "proportionnel"]
-
-        for label, key in zip(labels, keys):
-            row = f"{label:<3}"
-            for res in results[key]:
-                if res["motif_cible"] is None or res["prediction"] is None:
-                    value = "X"
-                else:
-                    value = f"{res['prediction']:.1f}({len(res['similar_blocks'])})"
-                row += f"|{value:^{col_width}}"
-            write(row + "|\n")
 
     def run_benchmark(self):
         if not self.csv_loaded:
@@ -1557,12 +1167,6 @@ class FlashscoreApp(tk.Tk):
                     results["decroissant"].append(self.detect_target_motif_prediction_disorder(series[:-1], ml, bloc, "decroissant"))
                     results["proportionnel"].append(self.detect_target_motif_prediction_disorder(series[:-1], ml, bloc, "proportionnel"))
                 self.log_motif_table(f, motif_configs, results)
-
-                log(f"\n===> GOAL PROB 2 <===")
-                used_global = set()
-                res2 = {t: self.fully_static_method_pattern1(series, ml, blocN, self.motif_next_distance, used_global)
-                        for t, ml, blocN in self.motif_configs2}
-                log(self.build_result_table(res2))
 
                 log(f"\n===> 📊 METHODE 3 <===")
                 lin_Id, lin_Pr, peak_Id, peak_Pr = [], [], [], []
@@ -1747,89 +1351,55 @@ class FlashscoreApp(tk.Tk):
         for log in (self.log_teamA,self.log_teamA_1,self.log_teamC,self.log_teamC_1):
             log.delete("1.0",tk.END)
 
-        def write_method4(series,log):
-            self.write_log(log,"===> 📊 WIN/LOSE PROB <===\n")
-            lin_Id,lin_Pr,peak_Id,peak_Pr=[],[],[],[]
-            for _,ml,blocN in self.motif_configs:
-                r=self.fully_static_method_pattern2(series,ml,blocN,self.motif_next_distance)
-                lin_Id.append(f"{r['pred_results1']['linear_rebound']:.1f}")
-                lin_Pr.append(f"{r['pred_results2']['linear_rebound']:.1f}")
-                peak_Id.append(f"{r['pred_results1']['peak_envelope']:.1f}")
-                peak_Pr.append(f"{r['pred_results2']['peak_envelope']:.1f}")
+        # UPPER LOG
+        def write_pattern(series, log):
+            self.write_log(log, "\nPATTERN\n")
 
-            def row(l,v):return f"{l:<2}|"+ "|".join(f"{x:^2}" for x in v)+"|"
+            for window_size in WINDOW_SIZES:
+                features = self.arround_last_features_pattern(series, window_size)
 
-            self.write_log(log,"Rebond linéaires:\n")
-            self.write_log(log,""+row("Id",lin_Id))
-            self.write_log(log,"\n"+row("Pr",lin_Pr))
-            self.write_log(log,"\n")
-            self.write_log(log,"\nPeak envelope:\n")
-            self.write_log(log,""+row("Id",peak_Id))
-            self.write_log(log,"\n"+ row("Pr", peak_Pr) + "\n\n")
-            
-        write_method4(seriesA,self.log_teamA)
-        write_method4(seriesC,self.log_teamC)
+                self.write_log(log, f"\n=== Window size: {window_size} ===\n")
 
-        def write_method1(series,log):
-            self.write_log(log,"===> 📊 GOAL PROB <===\n")
-            used_global = set()
-            res = [self.fully_static_method_pattern1(series, ml, blocN, self.motif_next_distance, used_global)
-                   for _, ml, blocN in self.motif_configs]
+                if window_size == 1:
+                    keys_to_show = ["Peak"]
+                elif window_size == 2:
+                    keys_to_show = ["HilbertMax"]
+                else:
+                    keys_to_show = []
 
-            self.write_log(log,self.build_prediction_table(res)+"\n")
+                for k in keys_to_show:
+                    self.write_log(
+                        log,
+                        f"{k:<18} → ⚽= {features[k]:>6}\n"
+                    )
 
-        write_method1(seriesA,self.log_teamA)
-        write_method1(seriesC,self.log_teamC)
+        write_pattern(seriesA, self.log_teamA)
+        write_pattern(seriesC, self.log_teamC)
 
-        def write_method2(series,log):
-            self.write_log(log, "\n===> GOAL PROB 1 <===\n")
-            motif_configs = [            
-                ("1°) ML=2 / Bloc=31", 2, 31),
-                ("2°) ML=3 / Bloc=61", 3, 61),
-                ("3°) ML=4 / Bloc=91", 4, 91),
-                ("4°) ML=6 / Bloc=91", 6, 91),
-            ]
+        def write_version_1(series, log):
+            self.write_log(log, "\nVERSION 1\n")
 
-            results = {
-                "croissant": [],
-                "decroissant": [],
-                "proportionnel": []
-            }
+            for window_size in WINDOW_SIZES2:
+                features = self.arround_last_features(series[:-1], window_size)
 
-            for title, ml, bloc in motif_configs:
-                res_croissant = self.detect_target_motif_prediction_disorder(
-                    series[:-1], motif_length=ml, block_size=bloc, motif_type="croissant"
-                )
-                results["croissant"].append(res_croissant)
+                self.write_log(log, f"\n=== Window size: {window_size} ===\n")
 
-                res_decroissant = self.detect_target_motif_prediction_disorder(
-                    series[:-1], motif_length=ml, block_size=bloc, motif_type="decroissant"
-                )
-                results["decroissant"].append(res_decroissant)
+                if window_size == 4:
+                    keys_to_show = ["Peak"]
+                elif window_size == 1:
+                    keys_to_show = ["HilbertMax"]
+                else:
+                    keys_to_show = []
 
-                res_prop = self.detect_target_motif_prediction_disorder(
-                    series[:-1], motif_length=ml, block_size=bloc, motif_type="proportionnel"
-                )
-                results["proportionnel"].append(res_prop)
+                for k in keys_to_show:
+                    self.write_log(
+                        log,
+                        f"{k:<18} → ⚽= {features[k]:>6}\n"
+                    )
 
-            self.log_motif_table(log, motif_configs, results)
-
-        write_method2(seriesA,self.log_teamA)
-        write_method2(seriesC,self.log_teamC)
+        write_version_1(seriesA, self.log_teamA)
+        write_version_1(seriesC, self.log_teamC)
         
-        def write_method3(series, log):
-            self.write_log(log, "\n===> GOAL PROB 2 <===\n")
-
-            used_global = set() 
-            res = {}
-            for t, ml, blocN in self.motif_configs2:
-                res[t] = self.fully_static_method_pattern1(series, ml, blocN, self.motif_next_distance, used_global)
-
-            self.write_log(log,self.build_result_table(res)+"\n")
-
-        write_method3(seriesA,self.log_teamA)
-        write_method3(seriesC,self.log_teamC)
-
         # LOWER LOG
         def write_lower(series, result, log, team_label):
             self.write_log(log,"=========== CORRECT SCORE SET 2 ===========\n")
@@ -1882,34 +1452,20 @@ class FlashscoreApp(tk.Tk):
             except Exception as e:
                 self.write_log(log, f"\n[ERROR predict_score] {e}\n")
 
-            # --- MODEL A 
+            # --- MODEL A B C D E
             score, _ = self.predict_score_from_seriesA(series, []) 
             self.write_log(log, f"\n🎯 MODEL A= {score}\n")
 
-            # --- MODEL B 
             scoreB, metaB = self.predict_score_from_seriesB(series, [])
 
             self.write_log(log, f"\n🎯 MODEL B= {scoreB}\n")
-            #self.write_log(log, "\nDETAILS:\n")
-            #self.write_log(log, f"• Recent mean (last 10) : {metaB.get('recent_mean')}\n")
-            #self.write_log(log, f"• Global median        : {metaB.get('global_median')}\n")
-            #self.write_log(log, f"• Base score           : {metaB.get('base_score')}\n")
-            #self.write_log(log, f"• Std deviation        : {metaB.get('std')}\n")
 
-            # --- MODEL C 
             scoreC, metaC = self.predict_score_from_seriesC(series, opponent_series=opponent_series)
             self.write_log(log, f"\n🎯 MODEL C= {scoreC}\n")           
-            #self.write_log(log, "\nDETAILS:\n")
-            #self.write_log(log, f"• Recent mean (last 10) : {metaC.get('recent_mean')}\n")
-            #self.write_log(log, f"• Global median        : {metaC.get('global_median')}\n")
-            #self.write_log(log, f"• Base score           : {metaC.get('base_score')}\n")
-            #self.write_log(log, f"• Std deviation        : {metaC.get('std')}\n\n")
 
-            # --- MODEL D
             scoreD = self.predict_score_from_seriesD(series)
             self.write_log(log, f"\n🎯 MODEL D = {scoreD}\n")
 
-            # --- MODEL E
             scoreE = self.predict_score_from_seriesE(series)
             self.write_log(log, f"\n🎯 MODEL E = {scoreE}\n")
 
