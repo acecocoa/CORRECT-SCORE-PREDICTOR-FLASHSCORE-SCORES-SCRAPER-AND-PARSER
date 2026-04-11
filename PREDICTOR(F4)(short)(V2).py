@@ -96,7 +96,6 @@ def predict_hybrid(y, steps=1):
 
     y = np.array(y, dtype=float)
 
-    # --- Sécurité minimale ---
     if len(y) == 0:
         return 0.0
     if len(y) == 1:
@@ -104,11 +103,9 @@ def predict_hybrid(y, steps=1):
 
     x = np.arange(len(y))
 
-    # --- Régression ---
     A = np.vstack([x, np.ones(len(x))]).T
     a, b = np.linalg.lstsq(A, y, rcond=None)[0]
 
-    # --- Enveloppes ---
     peaks_max, _ = find_peaks(y)
     peaks_min, _ = find_peaks(-y)
 
@@ -122,17 +119,14 @@ def predict_hybrid(y, steps=1):
 
     env_mid = (env_max + env_min) / 2
 
-    # --- Sécurité enveloppe ---
     if len(env_mid) == 0:
         env_mid = np.full_like(x, np.mean(y))
 
-    # --- Projection ---
     x_future = np.arange(len(y), len(y) + steps)
 
     reg_plus_future = a * x_future + b
     reg_minus_future = a * x_future - b
 
-    # pente enveloppe sécurisée
     if len(env_mid) > 1:
         slope_env = (env_mid[-1] - env_mid[0]) / len(env_mid)
     else:
@@ -140,7 +134,6 @@ def predict_hybrid(y, steps=1):
 
     env_future = env_mid[-1] + slope_env * (x_future - x[-1])
 
-    # --- Fusion ---
     prediction = (reg_plus_future + reg_minus_future + env_future) / 3
 
     return float(prediction[0])
@@ -367,33 +360,26 @@ class FlashscoreApp(tk.Tk):
         return np.array(segments), np.array(targets)
 
     def predict_regression_envelope(self, y, steps=1):
-        import numpy as np
-        from scipy.signal import find_peaks
 
         y = np.array(y, dtype=float)
 
-        # --- Sécurité ---
         if len(y) < 3:
             return {"prediction": float(y[-1]) if len(y) else 0.0}
 
         x = np.arange(len(y))
 
-        # --- Régression linéaire (moindres carrés) ---
         A = np.vstack([x, np.ones(len(x))]).T
         a, b = np.linalg.lstsq(A, y, rcond=None)[0]
 
-        # Modèles comparatifs
         y_reg_plus = a * x + b
         y_reg_minus = a * x - b
 
-        # --- Détection des enveloppes ---
         peaks_max, _ = find_peaks(y)
         peaks_min, _ = find_peaks(-y)
 
         x_max, y_max = x[peaks_max], y[peaks_max]
         x_min, y_min = x[peaks_min], y[peaks_min]
 
-        # --- Interpolation enveloppes ---
         def interp_env(xe, ye):
             if len(xe) < 2:
                 return np.full_like(x, np.mean(ye) if len(ye) else np.mean(y))
@@ -402,24 +388,19 @@ class FlashscoreApp(tk.Tk):
         env_max = interp_env(x_max, y_max)
         env_min = interp_env(x_min, y_min)
 
-        # Centre enveloppe
         env_mid = (env_max + env_min) / 2
 
-        # --- Projection future ---
         x_future = np.arange(len(y), len(y) + steps)
 
         reg_plus_future = a * x_future + b
         reg_minus_future = a * x_future - b
 
-        # pente enveloppe
         slope_env = (env_mid[-1] - env_mid[0]) / len(env_mid)
         env_future = env_mid[-1] + slope_env * (x_future - x[-1])
 
-        # --- Fusion intelligente ---
-        # pondération dynamique selon volatilité
         volatility = np.std(y)
 
-        w_reg = 1 / (1 + volatility)      # moins de poids si volatil
+        w_reg = 1 / (1 + volatility)   
         w_env = 1 - w_reg
 
         prediction = (

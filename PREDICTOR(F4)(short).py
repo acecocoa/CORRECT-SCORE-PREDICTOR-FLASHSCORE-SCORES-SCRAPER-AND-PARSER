@@ -293,6 +293,64 @@ class FlashscoreApp(tk.Tk):
                 targets.append(series[target])
 
         return np.array(segments), np.array(targets)
+
+    def predict_regression_envelope(self, y, steps=1):
+
+        y = np.array(y, dtype=float)
+
+        if len(y) < 3:
+            return {"prediction": float(y[-1]) if len(y) else 0.0}
+
+        x = np.arange(len(y))
+
+        A = np.vstack([x, np.ones(len(x))]).T
+        a, b = np.linalg.lstsq(A, y, rcond=None)[0]
+
+        y_reg_plus = a * x + b
+        y_reg_minus = a * x - b
+
+        peaks_max, _ = find_peaks(y)
+        peaks_min, _ = find_peaks(-y)
+
+        x_max, y_max = x[peaks_max], y[peaks_max]
+        x_min, y_min = x[peaks_min], y[peaks_min]
+
+        def interp_env(xe, ye):
+            if len(xe) < 2:
+                return np.full_like(x, np.mean(ye) if len(ye) else np.mean(y))
+            return np.interp(x, xe, ye)
+
+        env_max = interp_env(x_max, y_max)
+        env_min = interp_env(x_min, y_min)
+
+        env_mid = (env_max + env_min) / 2
+
+        x_future = np.arange(len(y), len(y) + steps)
+
+        reg_plus_future = a * x_future + b
+        reg_minus_future = a * x_future - b
+
+        slope_env = (env_mid[-1] - env_mid[0]) / len(env_mid)
+        env_future = env_mid[-1] + slope_env * (x_future - x[-1])
+
+        volatility = np.std(y)
+
+        w_reg = 1 / (1 + volatility)   
+        w_env = 1 - w_reg
+
+        prediction = (
+            w_reg * (reg_plus_future + reg_minus_future) / 2 +
+            w_env * env_future
+        )
+
+        return {
+            "prediction": float(prediction[0]),
+            "reg_plus": float(reg_plus_future[0]),
+            "reg_minus": float(reg_minus_future[0]),
+            "env_max": float(env_future[0]),
+            "slope": float(a),
+            "volatility": float(volatility)
+        }
     
     def motif_engine_complete2(self, series, tol=0.15):
         results = {}
@@ -1399,6 +1457,25 @@ class FlashscoreApp(tk.Tk):
 
         write_version_1(seriesA, self.log_teamA)
         write_version_1(seriesC, self.log_teamC)
+
+        def write_regression_envelope(series, log):
+            try:
+                pred = self.predict_regression_envelope(series[:-1])
+
+                self.write_log(log, "\n--- HYBRID REG / ENVELOPE ---\n")
+                self.write_log(
+                    log,
+                    f"⚽={pred['prediction']:.3f} | "
+                    f"+Reg={pred['reg_plus']:.3f} | "
+                    f"-Reg={pred['reg_minus']:.3f} | "
+                    f"Env={pred['env_max']:.3f}\n"
+                )
+
+            except Exception as e:
+                self.write_log(log, f"\n[ERROR HYBRID] {e}\n")
+
+        write_regression_envelope(seriesA, self.log_teamA)
+        write_regression_envelope(seriesC, self.log_teamC)
         
         # LOWER LOG
         def write_lower(series, result, log, team_label):
