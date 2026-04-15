@@ -490,7 +490,7 @@ class FlashscoreGUI(tk.Tk):
         tk.Button(frame_buttons, text="GET SCORE(S)", command=self.run_scores)\
             .grid(row=0, column=1, padx=5)
 
-        tk.Button(frame_buttons, text="DELETE LOG", command=self.reset_urls)\
+        tk.Button(frame_buttons, text="DELETE LOGS", command=self.reset_urls)\
             .grid(row=0, column=2, padx=5)
 
         frame_main = tk.Frame(self)
@@ -547,12 +547,17 @@ class FlashscoreGUI(tk.Tk):
         os.makedirs(self.export_dir, exist_ok=True)
 
         startup_msgs = [
+            "STEP 1:",
             "1.SELECT TIME(FROM & TO)",
             "2.PRESS SCAN",
-            "3.MAKE (MULTI)SELECTION IN THE LIST",
-            "4.SELECT SCORE AMOUNT(if needed)",
-            "4.PRESS GET SCORE(S)",
-            "Click DELETE LOG to remove this message"
+            "",
+            "STEP 2:",
+            "3.MAKE (MULTI)SELECTION IN THE LIST OR NOT TO GET ALL SCORES YOU SCANNED",
+            "4.SELECT SCORE AMOUNT(320 best accuracy)",
+            "5.SELECT EVENTS",
+            "6.PRESS GET SCORE(S)",
+            "ALL EVENTS= all available for betting",
+            "PRESS DELETE LOGS to remove this message"
         ]
 
         for msg in startup_msgs:
@@ -641,11 +646,11 @@ class FlashscoreGUI(tk.Tk):
         if not selected_idx:
             selected_matches = self.scanned_matches
             nb_selected = len(selected_matches)
-            self.log_msg(f"[⏳]Récupération: {nb_selected}")
+            self.log_msg(f"[⏳]Récupération tous: {nb_selected}")
         else:
             selected_matches = [self.scanned_matches[i] for i in selected_idx]
             nb_selected = len(selected_matches)
-            self.log_msg(f"[⏳]Récupération: {nb_selected}")
+            self.log_msg(f"[⏳]Récupération sélection: {nb_selected}")
 
         self.update_idletasks()
 
