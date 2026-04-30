@@ -962,6 +962,14 @@ class FlashscoreApp(tk.Tk):
             return 0
         return sum(data) / len(data)
 
+    def extract_last_means(self, series):
+        data = series[:-1]
+        last5 = sum(data[-5:]) / 5 if len(data) >= 5 else 0
+        last10 = sum(data[-10:]) / 10 if len(data) >= 10 else 0
+        last15 = sum(data[-15:]) / 15 if len(data) >= 15 else 0
+        last20 = sum(data[-20:]) / 20 if len(data) >= 20 else 0
+        return last10, last15, last20
+    
     def display_median_extrema_series_means(self,series,log_widget,mode="min"):
         data=series[:-1]
         if not data:return
@@ -2694,6 +2702,7 @@ class FlashscoreApp(tk.Tk):
             return
 
         filepath = "Benchmark_F4.txt.py"
+
         seriesA = read_numeric_after_marker(self.teamA_scores, "A")
         seriesC = read_numeric_after_marker(self.teamC_scores, "C")
 
@@ -2707,313 +2716,312 @@ class FlashscoreApp(tk.Tk):
             def log(x=""):
                 f.write(str(x) + "\n")
 
+            def write(log_obj, txt):
+                log(txt.rstrip("\n"))
+
+            # ========================= RESET HEADER
             log("\n" + "=" * 60)
             log("BENCHMARK MIRROR RUN_PREDICTION")
             log("=" * 60 + "\n")
 
-            teamA_score = getattr(self, "entry_teamA_score").get().strip()
-            teamC_score = getattr(self, "entry_teamC_score").get().strip()
+            # ========================= CLEAR LOGIC REMOVED (UI ONLY)
 
-            def run_team_block(series, opponent_series, result, label, score):
+            # ========================= PROBA PATTERN
+            def write_predict_proba(series):
+                write(log, "📊 PROBABILITY PATTERN (DISTANCE MODEL)\n")
 
-                log(f"\n================ TEAM {label} ================")
-                log(f"Score TEAM {label} = {score}\n")
+                results = self.predict_proba(series, window=5)
 
-                # =====================================================
-                # PATTERN
-                # =====================================================
-                def write_pattern(series):
-                    log("\n📊 PATTERN\n")
-                    for window_size in WINDOW_SIZES:
-                        features = self.arround_last_features_pattern(series, window_size)
-                        log(f"\nWindow {window_size}\n")
-                        keys = ["Peak"] if window_size == 1 else ["HilbertMax"] if window_size == 2 else []
-                        for k in keys:
-                            log(f"{k} → {features[k]}\n")
+                if not results:
+                    write(log, "Not enough data\n")
+                    return
 
-                write_pattern(series)
+                seen = set()
+                filtered = []
 
-                # =====================================================
-                # VERSION 1
-                # =====================================================
-                def write_version_1(series):
-                    log("\n📊 VERSION 1\n")
-                    for window_size in WINDOW_SIZES2:
-                        features = self.arround_last_features(series, window_size)
-                        log(f"\nWindow {window_size}\n")
-                        keys = ["HilbertMax"] if window_size == 1 else ["Peak"] if window_size == 4 else []
-                        for k in keys:
-                            log(f"{k} → {features[k]}\n")
+                for r in sorted(results, key=lambda x: x["probability_%"], reverse=True):
+                    if r["value"] in seen:
+                        continue
+                    seen.add(r["value"])
+                    filtered.append(r)
 
-                write_version_1(series)
+                top = filtered[:5]
 
-                # =====================================================
-                # HYBRID REG / ENVELOPE
-                # =====================================================
-                try:
-                    pred = self.predict_regression_envelope(series)
-                    log("\n📊 HYBRID REG/ENV\n")
-                    log(f"{pred}\n")
-                except Exception as e:
-                    log(f"[ERROR HYBRID] {e}\n")
+                headers = ["VALUE", "PROBA", "FREQ", "BOOST", "SCORE"]
 
-                # =====================================================
-                # ADV BLOCK ANALYSIS (MISSING FIXED)
-                # =====================================================
-                log("\n📊 ADV BLOCK ANALYSIS\n")
-                adv = self.analyze_blocks_and_frequencies(series)
+                values = [r["value"] for r in top]
+                probs  = [f"{r['probability_%']:.2f}" for r in top]
+                freq   = [f"{r['freq_%']:.2f}" for r in top]
+                boost  = [f"{r['boost_%']:.2f}" for r in top]
+                score  = [f"{r['score']:.2f}" for r in top]
 
-                if "error" not in adv:
-                    keys = sorted(set(adv["freq_global"]) | set(adv["freq_last"]))
+                cols = [values, probs, freq, boost, score]
 
-                    log("GLOBAL:\n")
-                    log(str(adv["freq_global"]) + "\n")
+                col_widths = [
+                    max(len(str(h)), max(len(str(v)) for v in col))
+                    for h, col in zip(headers, cols)
+                ]
 
-                    log("LAST:\n")
-                    log(str(adv["freq_last"]) + "\n")
+                header_row = "| " + " | ".join(
+                    f"{h:^{w}}" for h, w in zip(headers, col_widths)
+                ) + " |\n"
 
-                    log("DELTA:\n")
-                    log(str(adv["comparison"]) + "\n")
+                write(log, header_row)
 
-                    # BONUS / MALUS (FULL RESTORE)
-                    bm = adv.get("bonus_malus", {})
-                    log("\nBONUS/MALUS:\n")
-                    log(str(bm) + "\n")
+                sep = "|-" + "-|-".join("-" * w for w in col_widths) + "-|\n"
+                write(log, sep)
 
-                # =====================================================
-                # BLOCK PREDICTION
-                # =====================================================
-                try:
-                    block_result = self.analyze_blocks_and_predict(series)
-                    if "error" not in block_result:
-                        log(f"\nBLOCK PRED → {block_result['prediction']} | {block_result['match_score']}\n")
-                except Exception as e:
-                    log(f"[BLOCK ERROR] {e}\n")
+                for i in range(len(top)):
+                    row = "| " + " | ".join(
+                        f"{str(cols[j][i]):^{col_widths[j]}}"
+                        for j in range(len(headers))
+                    ) + " |\n"
 
-                # =====================================================
-                # SHIFT / ATTRACTOR / MARKOV
-                # =====================================================
-                log("\n📊 SHIFT / ATTRACTOR / MARKOV\n")
+                    write(log, row)
 
-                log(str(self.regime_shift_detector(series)) + "\n")
-                log(str(self.local_attractor_prediction(series)) + "\n")
-                log(str(self.markov_weighted_prediction(series)) + "\n")
+            # ========================= PATTERN + VERSION
+            def write_pattern_and_version(series):
+                write(log, "\n📊 PATTERN + VERSION 1\n")
 
-                # =====================================================
-                # ENGINE MODELS (MATCH RUN_PREDICTION EXACT)
-                # =====================================================
-                log("\n📊 ENGINE MODELS\n")
+                def render_block(title, window_sizes, feature_func, mapping):
+                    headers = ["FEAT.", "WS", "GOAL(S)", "NOTE"]
 
-                log(f"A = {self.predict_score_from_seriesA(series, [''])[0]}\n")
-                log(f"B = {self.predict_score_from_seriesB(series, [])}\n")
-                log(f"C = {self.predict_score_from_seriesC(series, opponent_series)[0]}\n")
-                log(f"D = {self.predict_score_from_seriesD(series)}\n")
-                log(f"E = {self.predict_score_from_seriesE(series)}\n")
+                    write(log, f"\n{title}\n")
+                    write(log, "|" + "|".join(f"{h:^10}" for h in headers) + "|\n")
+                    write(log, "|" + "|".join("-" * 10 for _ in headers) + "|\n")
 
-                # =====================================================
-                # PATTERN LAST 40 + DYNAMIC (INLINE FORMAT)
-                # =====================================================
+                    for window_size in window_sizes:
+                        features = feature_func(series, window_size)
+                        keys_to_show = mapping.get(window_size, [])
+
+                        for label, key in keys_to_show:
+
+                            best_flag = ""
+                            if title == "PATTERN" and label == "HM":
+                                best_flag = "BEST"
+
+                            row = [
+                                label,
+                                window_size,
+                                f"{features[key]:.2f}" if isinstance(features[key], (int, float)) else str(features[key]),
+                                best_flag
+                            ]
+
+                            write(
+                                log,
+                                "|" + "|".join(f"{str(v):^10}" for v in row) + "|\n"
+                            )
+
+                pattern_map = {
+                    1: [("PK", "Peak")],
+                    2: [("HM", "HilbertMax")]
+                }
+
+                version_map = {
+                    4: [("PK", "Peak")],
+                    1: [("HM", "HilbertMax")]
+                }
+
+                render_block("PATTERN", WINDOW_SIZES, self.arround_last_features_pattern, pattern_map)
+                render_block("VERSION 1", WINDOW_SIZES2, self.arround_last_features, version_map)
+
+            # ========================= MOTIF TABLE (identique)
+            def write_motif_table(title, results):
+                write(log, f"\n📊 {title}\n")
+
+                if not results:
+                    write(log, "No data\n")
+                    return
+
+                headers = ["VAL", "%", "%E", "SC", "EQ", "PR", "L"]
+
+                rows = []
+                for k, v in results.items():
+                    value = v.get("value", 0)
+
+                    row = [
+                        int(value),
+                        round(v.get("pourcentages", {}).get(value, 0) * 100),
+                        round(v.get("pourcentages_enrichi", {}).get(value, 0) * 100),
+                        round(v.get("adjusted", 0), 2),
+                        v.get("equal", 0),
+                        v.get("prop", 0),
+                        v.get("L", "-"),
+                    ]
+                    rows.append(row)
+
+                rows.sort(key=lambda r: (-r[2], r[0]))
+
+                col_widths = [
+                    max(len(str(row[i])) for row in rows + [headers])
+                    for i in range(len(headers))
+                ]
+
+                def fmt(row):
+                    return "|" + "|".join(
+                        f"{str(val):>{col_widths[i]}}"
+                        for i, val in enumerate(row)
+                    ) + "|\n"
+
+                write(log, fmt(headers))
+                write(log, "|" + "|".join("-" * w for w in col_widths) + "|\n")
+
+                for r in rows:
+                    write(log, fmt(r))
+
+            # ========================= LOWER BLOCK COMPLET
+            def write_lower(series, opponent_series):
+
+                # PATTERN LAST40
                 pattern_probs = self.predict_pattern_last40(series)
 
-                log("\n📊 PATTERN LAST40\n")
+                write(log, "📊 PATTERN LAST40\n")
 
                 if not pattern_probs:
-                    log("No data\n")
+                    write(log, "No data\n")
                 else:
                     sorted_probs = sorted(pattern_probs.items(), key=lambda x: x[1], reverse=True)
                     top = sorted_probs[:5]
 
-                    # 👉 format inline : v=xx(p%)
-                    inline = " | ".join(
-                        f"{int(v)}={int(round(p * 100))}%"
-                        for v, p in top
+                    col_width = max(
+                        max(len(str(int(v))) for v, _ in top),
+                        max(len(str(int(round(p*100)))) for _, p in top)
                     )
 
-                    log(f"Top5 → {inline}\n")
+                    label_val = "VAL"
+                    label_proba = "PROBA"
+                    label_width = max(len(label_val), len(label_proba))
 
-                    # 🔥 DYNAMIC PATTERN
-                    try:
-                        pred_dyn = self.predict_patterns_with_positions(series)
+                    row_vals = f"|{label_val:<{label_width}}|" + "|".join(
+                        f"{int(v):{col_width}}" for v, _ in top
+                    ) + "|\n"
 
-                        log("\n📊 DYNAMIC PATTERN ADJUSTMENT\n")
+                    row_probs = f"|{label_proba:<{label_width}}|" + "|".join(
+                        f"{int(round(p*100)):{col_width}}" for _, p in top
+                    ) + "|\n"
 
-                        # prédiction principale
-                        log(f"🎯 Pred → ⚽ {pred_dyn['prediction']}\n")
+                    write(log, row_vals)
+                    write(log, row_probs)
 
-                        dist = pred_dyn.get("distribution", {})
+                # SHIFT
+                write(log, "\n📊 SHIFT-ATTRACTOR-MARKOV\n")
 
-                        if dist:
-                            inline_dist = " | ".join(
-                                f"{k}={int(round(v * 100))}%"
-                                for k, v in dist.items()
-                            )
+                rs = self.regime_shift_detector(series)
+                write(log, f"🎯 Shi. → ⚽ {rs['prediction']:.2f} | Shift: {rs['shift']} | Score: {rs['score']:.2f}\n")
 
-                            log(f"Dist → {inline_dist}\n")
+                at = self.local_attractor_prediction(series)
+                write(log, f"🎯 Att. → ⚽ {at['prediction']:.2f} | Neighbors: {at['neighbors']} | Avg Distance: {at['avg_distance']:.2f}\n")
 
-                    except Exception as e:
-                        log(f"\n[DYNAMIC PATTERN ERROR] {e}\n")
+                mk = self.markov_weighted_prediction(series)
+                write(log, f"🎯 Mar. → ⚽ {mk['prediction']:.2f} | State: {mk['state']} | Confidence: {mk['confidence']:.2f}\n")
 
-                # =====================================================
-                # PREDICTION SCORES (ADDED)
-                # =====================================================
-                log("\n📊 PREDICTION SCORES\n")
+                # BONUS MALUS
+                write(log, "\n📊 /3= LOW & /2= X\n")
 
-                ps = self.prediction_scores(series)
+                adv = self.analyze_blocks_and_frequencies(series)
+                bm = adv.get("bonus_malus", {})
+                spectre = bm.get("spectre", {})
 
-                if not ps:
-                    log("No data\n")
+                all_keys_bm = sorted(int(float(k)) for k in spectre.keys())
+
+                if not all_keys_bm:
+                    write(log, "No bonus/malus data\n")
                 else:
-                    keys = ps["keys"]
+                    col_width = max(2, max(len(str(k)) for k in all_keys_bm))
+                    label_header = "VAL  "
+                    label_width = len(label_header)
 
-                    col_width = max(2, max(len(str(k)) for k in keys))
+                    header = f"|{label_header:<{label_width}}|" + "|".join(
+                        f"{k:{col_width}}" for k in all_keys_bm
+                    ) + "|\n"
 
-                    def row(vals):
-                        return "|" + "|".join(f"{v:{col_width}}" for v in vals) + "|\n"
+                    def row(values, label):
+                        return f"|{label:<{label_width}}|" + "|".join(
+                            f"{v:{col_width}}" for v in values
+                        ) + "|\n"
 
-                    header = row(keys)
+                    def scale(data):
+                        return [round(data.get(k, 0) * 100) for k in all_keys_bm]
 
-                    # POURCENTAGES
-                    log("FREQ (%)\n")
-                    log(header)
-                    log(row([round(ps["pourcentages"][k] * 100) for k in keys]))
+                    for title, data in [
+                        ("🎯 X CONFLICT (%)", bm.get("prev_bonus", {})),
+                        ("\n🎯 V CONFLICT (%)", bm.get("prev_prev_bonus", {})),
+                    ]:
+                        write(log, title + "\n")
+                        write(log, header)
+                        write(log, row(scale(data), "PROBA"))
 
-                    # ANCIENNETE
-                    log("\nRECENCY (%)\n")
-                    log(header)
-                    log(row([round(ps["anciennete"][k] * 100) for k in keys]))
-
-                    # BAREME
-                    log("\nWEIGHT\n")
-                    log(header)
-                    log(row([ps["bareme"][k] for k in keys]))
-
-                    # PROBA
-                    log("\nPROBA (%)\n")
-                    log(header)
-                    log(row([round(ps["proba"][k] * 100) for k in keys]))
-
-                    # RESULT
-                    log(
-                        f"\n🎯 PS → ⚽ {ps['prediction']} | adj={ps['adjusted']:.2f}\n"
-                    )
-                        
-                # =====================================================
-                # ACCURACY COMPLETE
-                # =====================================================
-                results_complete = self.motif_engine_complete2(series)
-                results_targeted = self.motif_engine_targeted_with_cr2(series, tol=0.15)
-
-                divergenceT = self.decide_divergence_targeted(results_targeted)
-
-                log("\n📊 ACCURACY\n")
-                log(str(results_complete) + "\n")
-                log(f"→ {divergenceT}\n")
-
-                # =====================================================
-                # ACCURACY 2 / 3 / 4 (IMPORTANT MISSING FIX)
-                # =====================================================
-                results_complete2 = self.motif_engine_complete2_2(series)
-                results_targeted2 = self.motif_engine_targeted_with_cr2_2(series, tol=0.15)
-                divergenceT2 = self.decide_divergence_targeted_2(results_targeted2)
-
-                log("\n📊 ACCURACY 2\n")
-                log(str(results_complete2) + "\n")
-
-                log("\n📊 ACCURACY 3\n")
-                log(str(results_targeted2) + "\n")
-
-                log(f"\n→ {divergenceT2}\n")
-
-                # =====================================================
-                # OVER LINEAR REBOUND
-                # =====================================================
-                lin = self.linear_rebound_prediction(series)
-                peak = self.peak_envelope_prediction(series)
-                avg_rem = self.compute_average_remaining(series)
-
-                log("\n📊 OVER LINEAR REBOUND\n")
-                log(f"{lin} | {peak} | {avg_rem}\n")
-
-                # =====================================================
-                # OVER 1 (MISSING IMPORTANT BLOCK)
-                # =====================================================
-                motif, data = result
-                e, p, pi, m, next_v, reb, peak_v = data
-
-                lin1 = self.linear_rebound(next_v)
-                peak1 = self.peak_envelope(next_v)
-                avg1 = self.compute_average_remaining(next_v)
-
-                log("\n📊 OVER LINEAR REBOUND 1\n")
-                log(f"{lin1} | {peak1} | {avg1}\n")
-
-                # =====================================================
-                # UNDER LINEAR REBOUND
-                # =====================================================
-                log("\n📊 UNDER LINEAR REBOUND\n")
-                for b in self.compute_blocks_with_gaps(series, 2, None, log):
-                    log(str(b) + "\n")
-
-                # =====================================================
-                # FINAL DISPLAY BLOCKS (MISSING IN SIMPLE VERSION)
-                # =====================================================
                 self.display_recent_averages(series, log)
                 self.display_median_extrema_means(series, log, "min")
                 self.display_median_extrema_means(series, log, "max")
 
-            # RUN BOTH TEAMS
-            run_team_block(seriesA, seriesC, resultA, "A", teamA_score)
-            run_team_block(seriesC, seriesA, resultC, "C", teamC_score)
+                # PREDICTION SCORES
+                write(log, "\n📊 PREDICTION SCORES\n")
+
+                ps = self.prediction_scores(series)
+
+                if not ps:
+                    write(log, "Not enough data\n")
+                else:
+                    keys = sorted(ps["keys"], key=lambda k: ps["proba"][k], reverse=True)
+
+                    headers = ["VAL", "FREQ", "%", "AGE", "BAR", "PROBA"]
+
+                    values = keys
+                    freq   = [ps["freq"][k] for k in keys]
+                    pct    = [round(ps["pourcentages"][k]*100) for k in keys]
+                    age    = [f"{ps['anciennete'][k]:.2f}" for k in keys]
+                    bar    = [ps["bareme"][k] for k in keys]
+                    proba  = [f"{ps['proba'][k]*100:.2f}" for k in keys]
+
+                    cols = [values, freq, pct, age, bar, proba]
+
+                    col_widths = [
+                        max(len(str(h)), max(len(str(v)) for v in col))
+                        for h, col in zip(headers, cols)
+                    ]
+
+                    header_row = "|" + "|".join(
+                        f"{h:^{w}}" for h, w in zip(headers, col_widths)
+                    ) + "|\n"
+                    write(log, header_row)
+
+                    sep = "|" + "|".join("-" * w for w in col_widths) + "|\n"
+                    write(log, sep)
+
+                    for i in range(len(values)):
+                        row = "|" + "|".join(
+                            f"{str(cols[j][i]):^{col_widths[j]}}"
+                            for j in range(len(headers))
+                        ) + "|\n"
+                        write(log, row)
+
+                    write(log, f"\n🎯 BEST → ⚽ {ps['prediction']} | adjusted={ps['adjusted']:.2f}\n")
+
+            # ========================= EXECUTION
+            write_predict_proba(seriesA)
+            write_pattern_and_version(seriesA)
+
+            write_motif_table("MOTIF ENGINE COMPLETE - A", self.motif_engine_complete2(seriesA))
+            write_motif_table("MOTIF ENGINE TARGETED + CR2 - A", self.motif_engine_targeted_with_cr2(seriesA, tol=0.15))
+            write_motif_table("MOTIF ENGINE COMPLETE V2 - A", self.motif_engine_complete2_2(seriesA))
+            write_motif_table("MOTIF ENGINE TARGETED V2 - A", self.motif_engine_targeted_with_cr2_2(seriesA, tol=0.15))
+
+            write_lower(seriesA, seriesC)
+
+            log("\n" + "-" * 50 + "\n")
+
+            write_predict_proba(seriesC)
+            write_pattern_and_version(seriesC)
+
+            write_motif_table("MOTIF ENGINE COMPLETE - C", self.motif_engine_complete2(seriesC))
+            write_motif_table("MOTIF ENGINE TARGETED + CR2 - C", self.motif_engine_targeted_with_cr2(seriesC, tol=0.15))
+            write_motif_table("MOTIF ENGINE COMPLETE V2 - C", self.motif_engine_complete2_2(seriesC))
+            write_motif_table("MOTIF ENGINE TARGETED V2 - C", self.motif_engine_targeted_with_cr2_2(seriesC, tol=0.15))
+
+            write_lower(seriesC, seriesA)
 
         messagebox.showinfo("Benchmark", "Benchmark terminé ✔")
-            
-    def extract_last_means(self, series):
-        data = series[:-1]
-        last5 = sum(data[-5:]) / 5 if len(data) >= 5 else 0
-        last10 = sum(data[-10:]) / 10 if len(data) >= 10 else 0
-        last15 = sum(data[-15:]) / 15 if len(data) >= 15 else 0
-        last20 = sum(data[-20:]) / 20 if len(data) >= 20 else 0
-        return last10, last15, last20
-
-    def extract_median_extrema(self, series, mode="min"):
-        data = series[:-1]
-        configs = [(3,15),(7,15),(7,27),(7,51),(13,27),(13,51),(13,99),(25,51),(25,99)]
-
-        values = []
-        for mean_size, zone_size in configs:
-            if len(data) < zone_size:
-                continue
-            zone = data[-zone_size:]
-            val = min(zone) if mode == "min" else max(zone)
-            idx = zone.index(val)
-
-            half = mean_size // 2
-            start = max(0, idx - half)
-            end = start + mean_size
-            if end > len(zone):
-                end = len(zone)
-                start = end - mean_size
-
-            subset = zone[start:end]
-            if len(subset) == mean_size:
-                values.append(sum(subset) / mean_size)
-
-        return values if values else [0]
-
-    def extract_over_under(self, series):
-        data = series[:-1]
-        if len(data) < 5:
-            return "neutre"
-
-        last = data[-1]
-        avg = sum(data[-10:]) / min(10, len(data))
-
-        if last > avg:
-            return "+ de"
-        elif last < avg:
-            return "- de"
-        else:
-            return "à 0"
 
     def run_prediction(self,motif_length=2):
         seriesA=read_numeric_after_marker(self.teamA_scores,"A")
@@ -3080,15 +3088,6 @@ class FlashscoreApp(tk.Tk):
                 ) + " |\n"
 
                 self.write_log(log, row)
-
-            # =========================
-            # BEST RESULT
-            # =========================
-            #best = top[0]
-            #self.write_log(
-            #    log,
-            #    f"\n🎯 BEST → ⚽ {best['value']} | proba={best['probability_%']}%\n"
-            #)
 
         write_predict_proba(seriesA, self.log_teamA)
         write_predict_proba(seriesC, self.log_teamC)
@@ -3162,9 +3161,6 @@ class FlashscoreApp(tk.Tk):
         write_pattern_and_version(seriesA, self.log_teamA)
         write_pattern_and_version(seriesC, self.log_teamC)
 
-        # =========================
-        # 📊 MOTIF ENGINES TABLES
-        # =========================
         results_complete_A = self.motif_engine_complete2(seriesA)
         results_targeted_A = self.motif_engine_targeted_with_cr2(seriesA, tol=0.15)
         results_complete2_A = self.motif_engine_complete2_2(seriesA)
@@ -3204,8 +3200,6 @@ class FlashscoreApp(tk.Tk):
             has_cr2 = any(v.get("Cr2") for v in results.values())
 
             headers = ["VAL", "%", "%E", "SC", "EQ", "PR", "L"]
-            #if has_cr2:
-            #    headers += ["C2", "Δ"]
 
             def safe(x):
                 return round(x, 2) if isinstance(x, (int, float)) else 0
@@ -3224,12 +3218,6 @@ class FlashscoreApp(tk.Tk):
                     v.get("prop", 0),
                     v.get("L", "-"),
                 ]
-
-                #if has_cr2:
-                #    row += [
-                #        v.get("Cr2", False),
-                #        safe(v.get("cr2_value")) if v.get("cr2_value") is not None else "-"
-                #    ]
 
                 rows.append(row)
 
@@ -3263,7 +3251,6 @@ class FlashscoreApp(tk.Tk):
         write_motif_table("MOTIF ENGINE TARGETED V2 - C", results_targeted2_C, self.log_teamC)
                      
         def write_lower(series, opponent_series, result, log, team_label):
-            # --- PATTERN LAST 40 ---
             pattern_probs = self.predict_pattern_last40(series)
 
             self.write_log(log, "📊 PATTERN LAST40\n")
@@ -3296,7 +3283,6 @@ class FlashscoreApp(tk.Tk):
                 self.write_log(log, row_vals)
                 self.write_log(log, row_probs)
                 
-            # New predictions from the added methods
             self.write_log(log,"\n📊 SHIFT-ATTRACTOR-MARKOV\n")
             regime_shift = self.regime_shift_detector(series)
             self.write_log(log, f"🎯 Shi. → ⚽ {regime_shift['prediction']:.2f} | Shift: {regime_shift['shift']} | Score: {regime_shift['score']:.2f}\n")
@@ -3307,7 +3293,6 @@ class FlashscoreApp(tk.Tk):
             markov_prediction = self.markov_weighted_prediction(series)
             self.write_log(log, f"🎯 Mar. → ⚽ {markov_prediction['prediction']:.2f} | State: {markov_prediction['state']} | Confidence: {markov_prediction['confidence']:.2f}\n")
             
-            # BONUS / MALUS SECTION
             self.write_log(log, "\n📊 /3= LOW & /2= X\n")
             adv = self.analyze_blocks_and_frequencies(series)
             bm = adv.get("bonus_malus", {})
@@ -3335,8 +3320,6 @@ class FlashscoreApp(tk.Tk):
                     return [round(data.get(k, 0) * 100) for k in all_keys_bm]
 
                 tables = [
-                    #("🎯 TABLE X (%)", bm.get("prev_malus", {})),
-                    #("🎯 TABLE V (%)", bm.get("prev_prev_malus", {})),
                     ("🎯 X CONFLICT (%)", bm.get("prev_bonus", {})),
                     ("\n🎯 V CONFLICT (%)", bm.get("prev_prev_bonus", {})),
                 ]
@@ -3345,14 +3328,6 @@ class FlashscoreApp(tk.Tk):
                     self.write_log(log, f"{title}\n")
                     self.write_log(log, header)
                     self.write_log(log, row(scale(data), "PROBA"))
-                 
-                ###self.write_log(log, f"Blocks: {adv['num_blocks']}\n")
-                ###self.write_log(log, f"Last block: {adv['last_block']}\n")
-                                                                                        
-                    # --- fréquences globales ---
-                    #self.write_log(log, "\nGlobal frequencies (series[:-1]):\n")
-                    #for k, v in sorted(block_result["frequencies"].items()):
-                    #    self.write_log(log, f"⚽={k:<3} → freq={v:.3f}\n")
 
             results_complete = self.motif_engine_complete2(series)
             results_targeted = self.motif_engine_targeted_with_cr2(series, tol=0.15)
@@ -3367,16 +3342,11 @@ class FlashscoreApp(tk.Tk):
             lin = self.linear_rebound_prediction(series)
             peak = self.peak_envelope_prediction(series)
             avg_rem = self.compute_average_remaining(series)
-
-            last10, last15, last20 = self.extract_last_means(series)
             
             self.display_recent_averages(series,log)
             self.display_median_extrema_means(series,log,"min")
             self.display_median_extrema_means(series,log,"max")
 
-            # =========================
-            # 📊 PREDICTION SCORES (MARKOV ENRICHI)
-            # =========================
             self.write_log(log, "\n📊 PREDICTION SCORES\n")
 
             ps = self.prediction_scores(series)
@@ -3425,21 +3395,14 @@ class FlashscoreApp(tk.Tk):
                     f"\n🎯 BEST → ⚽ {best} | adjusted={adjusted:.2f}\n"
                 )
 
-
-                # =========================
-                # 📊 HYBRID MODELS (LR / PE / LR_PRED / PE_PRED)
-                # =========================
                 self.write_log(log, "\n📊 LINEAR Reb. & PEAK Env.\n")
 
-                # --- Versions simples ---
                 lin_simple = self.linear_rebound2(series)
                 peak_simple = self.peak_envelope2(series)
 
-                # --- Versions enrichies ---
                 lin_pred = self.linear_rebound_prediction2(series)
                 peak_pred = self.peak_envelope_prediction2(series)
 
-                # Sécurisation
                 lin_val = lin_simple if isinstance(lin_simple, (int, float)) else 0
                 peak_val = peak_simple if isinstance(peak_simple, (int, float)) else 0
 
@@ -3450,21 +3413,12 @@ class FlashscoreApp(tk.Tk):
                 peak_mk = peak_pred.get("adjusted", 0) if peak_pred else 0
 
                 text = (
-                    #f"\n🎯 LINEAR SIMPLE   → ⚽ {lin_val:.2f}\n"
-                    #f"🎯 PEAK SIMPLE     → ⚽ {peak_val:.2f}\n"
                     f"\n🎯 LINEAR PRED     → ⚽ {lin_p:.2f} | MK ⚽={lin_mk:.2f}\n"
                     f"🎯 PEAK PRED       → ⚽ {peak_p:.2f} | MK ⚽={peak_mk:.2f}\n"
                 )
 
                 self.write_log(log, text)
 
-                # =========================
-                # 📊 SCORES INDIVIDUELS TABLES
-
-
-                # =========================
-                # 📊 SCORES INDIVIDUELS TABLES
-                # =========================
                 self.write_log(log, "\n📊 SCORES INDIVIDUELS TABLES\n")
 
                 models = {
@@ -3488,7 +3442,6 @@ class FlashscoreApp(tk.Tk):
                         self.write_log(log, f"Error: {e}\n")
                         continue
 
-                    # cas particulier modèle A (retourne dict imbriqué)
                     if name == "A_MODEL" and isinstance(res, dict) and "A" in res:
                         res = res["A"]
 
@@ -3502,7 +3455,6 @@ class FlashscoreApp(tk.Tk):
                     age  = res.get("anciennete", {})
                     bar  = res.get("bareme", {})
 
-                    # tri TOP 5
                     top = sorted(proba.items(), key=lambda x: x[1], reverse=True)[:5]
 
                     headers = ["VAL", "PROBA%", "FREQ", "%", "AGE", "BAR"]
@@ -3529,15 +3481,12 @@ class FlashscoreApp(tk.Tk):
                             for i, val in enumerate(row)
                         ) + "|\n"
 
-                    # header
                     self.write_log(log, fmt(headers))
                     self.write_log(log, "|" + "|".join("-" * w for w in col_widths) + "|\n")
 
-                    # rows
                     for r in rows:
                         self.write_log(log, fmt(r))
 
-                    # BEST
                     best_val = res.get("prediction", 0)
                     best_adj = res.get("adjusted", 0)
 
